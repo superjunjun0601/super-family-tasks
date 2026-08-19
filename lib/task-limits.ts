@@ -1,0 +1,12 @@
+export const taskTitleMaxLength = 80;
+export const taskNoteMaxLength = 500;
+export const taskShortLabelMaxLength = 40;
+export const taskRepeatLabelMaxLength = 80;
+export const minReminderDays = 0;
+export const maxReminderDays = 3;
+export const minRepeatWeekday = 1;
+export const maxRepeatWeekday = 7;
+export const maxRepeatWeekdays = 7;
+export const minRewardStars = 1;
+export const maxRewardStars = 99;
+export const maxCommentLength = 300;

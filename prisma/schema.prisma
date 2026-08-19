@@ -1,0 +1,203 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  MOM
+  DAD
+  CHILD
+}
+
+enum TaskCategory {
+  FAMILY
+  PERSONAL
+  CHILD_STUDY
+}
+
+enum Priority {
+  URGENT
+  IMPORTANT
+  NORMAL
+}
+
+enum TaskStatus {
+  TODO
+  DONE
+  PENDING_REWARD
+}
+
+enum RewardStatus {
+  NONE
+  PENDING
+  CONFIRMED
+}
+
+enum RewardAction {
+  GRANT
+  REVOKE
+  ADJUST
+  FEED_PET
+}
+
+enum ReminderType {
+  BEFORE_DUE
+  OVERDUE
+  REWARD_PENDING
+  CUSTOM
+}
+
+model User {
+  id            String          @id @default(cuid())
+  username      String          @unique
+  passwordHash  String
+  displayName   String
+  role          UserRole
+  avatar        String?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  createdTasks  Task[]          @relation("CreatedTasks")
+  ownedTasks    TaskOwner[]
+  comments      TaskComment[]
+  completed     Task[]          @relation("CompletedTasks")
+  rewardLogs    RewardLog[]     @relation("RewardUser")
+  confirmations RewardLog[]     @relation("RewardConfirmer")
+  reminders     ReminderLog[]
+  petState      PetState?
+}
+
+model Task {
+  id           String          @id @default(cuid())
+  title        String
+  note         String?
+  category     TaskCategory
+  creatorId    String
+  creator      User            @relation("CreatedTasks", fields: [creatorId], references: [id])
+  owners       TaskOwner[]
+  priority     Priority        @default(NORMAL)
+  dueAt        DateTime
+  remindAt     DateTime?
+  status       TaskStatus      @default(TODO)
+  completedBy  String?
+  completedByUser User?        @relation("CompletedTasks", fields: [completedBy], references: [id])
+  completedAt  DateTime?
+  rewardStars  Int             @default(0)
+  rewardStatus RewardStatus    @default(NONE)
+  repeatEnabled Boolean        @default(false)
+  repeatRule    Json?
+  repeatUntil   DateTime?
+  seriesId      String?
+  deletedAt     DateTime?
+  deletedBy     String?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  occurrences   TaskOccurrence[]
+  comments      TaskComment[]
+  rewardLogs    RewardLog[]
+  reminders     ReminderLog[]
+}
+
+model TaskOwner {
+  taskId String
+  userId String
+  task   Task   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([taskId, userId])
+}
+
+model TaskOccurrence {
+  id             String     @id @default(cuid())
+  taskId         String
+  task           Task       @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  seriesId       String?
+  occurrenceDate DateTime
+  dueAt          DateTime
+  remindAt       DateTime?
+  status         TaskStatus @default(TODO)
+  completedBy    String?
+  completedAt    DateTime?
+  overrideData   Json?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+}
+
+model TaskComment {
+  id        String   @id @default(cuid())
+  taskId    String
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  content   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model RewardLog {
+  id          String       @id @default(cuid())
+  taskId      String?
+  task        Task?        @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  userId      String
+  user        User         @relation("RewardUser", fields: [userId], references: [id], onDelete: Cascade)
+  starsChange Int
+  action      RewardAction
+  confirmedBy String?
+  confirmer   User?        @relation("RewardConfirmer", fields: [confirmedBy], references: [id])
+  confirmedAt DateTime?
+  createdAt   DateTime     @default(now())
+}
+
+model PetState {
+  id           String   @id @default(cuid())
+  childId      String   @unique
+  child        User     @relation(fields: [childId], references: [id], onDelete: Cascade)
+  level        Int      @default(1)
+  happiness    Int      @default(60)
+  starsBalance Int      @default(0)
+  fedToday     Boolean  @default(false)
+  updatedAt    DateTime @updatedAt
+}
+
+model ReminderLog {
+  id           String       @id @default(cuid())
+  taskId       String
+  task         Task         @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  targetUserId String
+  targetUser   User         @relation(fields: [targetUserId], references: [id], onDelete: Cascade)
+  remindType   ReminderType
+  scheduledFor DateTime
+  sentAt       DateTime?
+  readAt       DateTime?
+  status       String       @default("pending")
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  entityType String
+  entityId   String
+  action     String
+  beforeData Json?
+  afterData  Json?
+  createdAt  DateTime @default(now())
+}
+
+// Keep the application's current rich JSON shape while moving persistence to
+// PostgreSQL. This preserves presentation labels, embedded comments, and
+// migration-only fields without requiring a risky relational rewrite.
+model AppState {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+}
+
+model LoginAttempt {
+  key          String   @id
+  blockedUntil DateTime?
+  failedAt     Json
+  updatedAt    DateTime @updatedAt
+}

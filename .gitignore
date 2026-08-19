@@ -1,0 +1,16 @@
+.DS_Store
+node_modules
+.next
+.next-doctor-build
+.next-doctor-build-*
+.next-smoke
+.next-smoke-*
+out
+dist
+.env
+.env.local
+.env.*.local
+coverage
+*.log
+data/*
+!data/.gitignore
