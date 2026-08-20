@@ -53,8 +53,11 @@ const defaultTaskStore: TaskStore = {
 
 const store =
   globalTaskStore.__superFamilyTaskStore ??
-  (globalTaskStore.__superFamilyTaskStore = sanitizeTaskStore(readJsonFile(taskStoreFileName, defaultTaskStore)));
-let loadedTaskStoreMtime = globalTaskStore.__superFamilyTaskStoreMtime ?? getJsonFileMtime(taskStoreFileName);
+  (globalTaskStore.__superFamilyTaskStore = hasDatabaseConfig()
+    ? sanitizeTaskStore(defaultTaskStore)
+    : sanitizeTaskStore(readJsonFile(taskStoreFileName, defaultTaskStore)));
+let loadedTaskStoreMtime =
+  globalTaskStore.__superFamilyTaskStoreMtime ?? (hasDatabaseConfig() ? 0 : getJsonFileMtime(taskStoreFileName));
 globalTaskStore.__superFamilyTaskStoreMtime = loadedTaskStoreMtime;
 
 export async function listTasks() {
@@ -321,8 +324,10 @@ function isSameEditableSeriesTask(task: Task, sourceTaskId: string, seriesId: st
 
 async function persistTaskStore() {
   await writePersistentState(taskStateKey, taskStoreFileName, store);
-  loadedTaskStoreMtime = getJsonFileMtime(taskStoreFileName);
-  globalTaskStore.__superFamilyTaskStoreMtime = loadedTaskStoreMtime;
+  if (!hasDatabaseConfig()) {
+    loadedTaskStoreMtime = getJsonFileMtime(taskStoreFileName);
+    globalTaskStore.__superFamilyTaskStoreMtime = loadedTaskStoreMtime;
+  }
 }
 
 async function refreshTaskStoreFromDisk() {

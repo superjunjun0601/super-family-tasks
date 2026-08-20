@@ -25,8 +25,11 @@ const globalPetStore = globalThis as typeof globalThis & {
 
 const store =
   globalPetStore.__superFamilyPetStore ??
-  (globalPetStore.__superFamilyPetStore = sanitizePetStore(readJsonFile(petStoreFileName, defaultPetStore)));
-let loadedPetStoreMtime = globalPetStore.__superFamilyPetStoreMtime ?? getJsonFileMtime(petStoreFileName);
+  (globalPetStore.__superFamilyPetStore = hasDatabaseConfig()
+    ? sanitizePetStore(defaultPetStore)
+    : sanitizePetStore(readJsonFile(petStoreFileName, defaultPetStore)));
+let loadedPetStoreMtime =
+  globalPetStore.__superFamilyPetStoreMtime ?? (hasDatabaseConfig() ? 0 : getJsonFileMtime(petStoreFileName));
 globalPetStore.__superFamilyPetStoreMtime = loadedPetStoreMtime;
 
 export async function getPetStore() {
@@ -54,8 +57,10 @@ export async function feedPet() {
 
 async function persistPetStore() {
   await writePersistentState(petStateKey, petStoreFileName, store);
-  loadedPetStoreMtime = getJsonFileMtime(petStoreFileName);
-  globalPetStore.__superFamilyPetStoreMtime = loadedPetStoreMtime;
+  if (!hasDatabaseConfig()) {
+    loadedPetStoreMtime = getJsonFileMtime(petStoreFileName);
+    globalPetStore.__superFamilyPetStoreMtime = loadedPetStoreMtime;
+  }
 }
 
 async function refreshPetStoreFromDisk() {

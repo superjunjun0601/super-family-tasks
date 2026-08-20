@@ -32,8 +32,11 @@ const globalUserStore = globalThis as typeof globalThis & {
 
 const store =
   globalUserStore.__superFamilyUserStore ??
-  (globalUserStore.__superFamilyUserStore = sanitizeUserStore(readJsonFile(userStoreFileName, defaultUserStore)));
-let loadedUserStoreMtime = globalUserStore.__superFamilyUserStoreMtime ?? getJsonFileMtime(userStoreFileName);
+  (globalUserStore.__superFamilyUserStore = hasDatabaseConfig()
+    ? sanitizeUserStore(defaultUserStore)
+    : sanitizeUserStore(readJsonFile(userStoreFileName, defaultUserStore)));
+let loadedUserStoreMtime =
+  globalUserStore.__superFamilyUserStoreMtime ?? (hasDatabaseConfig() ? 0 : getJsonFileMtime(userStoreFileName));
 globalUserStore.__superFamilyUserStoreMtime = loadedUserStoreMtime;
 
 export function findPrototypeUser(userId: string) {
@@ -107,8 +110,10 @@ export async function updateReminderSettings(userId: string, settings: ReminderS
 
 async function persistUserStore() {
   await writePersistentState(userStateKey, userStoreFileName, store);
-  loadedUserStoreMtime = getJsonFileMtime(userStoreFileName);
-  globalUserStore.__superFamilyUserStoreMtime = loadedUserStoreMtime;
+  if (!hasDatabaseConfig()) {
+    loadedUserStoreMtime = getJsonFileMtime(userStoreFileName);
+    globalUserStore.__superFamilyUserStoreMtime = loadedUserStoreMtime;
+  }
 }
 
 async function refreshUserStoreFromDisk() {
