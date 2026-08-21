@@ -28,7 +28,7 @@ export function getAuthCookieOptions() {
     maxAge: AUTH_COOKIE_MAX_AGE_SECONDS,
     path: "/",
     sameSite: "lax" as const,
-    secure: process.env.NODE_ENV === "production"
+    secure: isAuthCookieSecureEnabled()
   };
 }
 
@@ -66,4 +66,11 @@ function signaturesMatch(first: string, second: string) {
 
 function getAuthSecret() {
   return process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET || localDevAuthSecret;
+}
+
+function isAuthCookieSecureEnabled() {
+  const configuredValue = process.env.AUTH_COOKIE_SECURE?.trim().toLowerCase();
+  if (configuredValue === "false" || configuredValue === "0" || configuredValue === "no") return false;
+  if (configuredValue === "true" || configuredValue === "1" || configuredValue === "yes") return true;
+  return process.env.NODE_ENV === "production";
 }
