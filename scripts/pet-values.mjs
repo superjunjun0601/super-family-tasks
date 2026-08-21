@@ -1,2 +1,2 @@
-export const petBaseFlowers = 12;
+export const petBaseFlowers = 0;
 export const petStarsPerLevel = 5;
