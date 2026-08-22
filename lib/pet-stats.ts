@@ -1,5 +1,6 @@
 import type { Task } from "@/lib/types";
-import { petBaseFlowers, petStarsPerLevel } from "@/lib/pet-values";
+import { petBaseFlowers } from "@/lib/pet-values";
+import { getCurrentLevel, getFlowersToNextLevel, getNextLevel, getProgressPercent } from "@/lib/pet-levels";
 import { doneStatus } from "@/lib/task-values";
 
 export type PetStats = {
@@ -8,22 +9,26 @@ export type PetStats = {
   happiness: number;
   nextLevelIn: number;
   levelProgress: number;
+  currentLevel: ReturnType<typeof getCurrentLevel>;
+  nextLevelLabel: string | null;
 };
 
 export function getPetStats(tasks: Task[], fedFlowers: number): PetStats {
   const flowers = getAvailableFlowers(tasks, fedFlowers);
-  const level = Math.floor(fedFlowers / petStarsPerLevel) + 1;
-  const currentLevelStart = (level - 1) * petStarsPerLevel;
-  const nextLevelAt = level * petStarsPerLevel;
-  const progressFlowers = fedFlowers - currentLevelStart;
-  const nextLevelIn = Math.max(0, nextLevelAt - fedFlowers);
+  const happiness = Math.max(0, Math.floor(fedFlowers));
+  const currentLevel = getCurrentLevel(happiness);
+  const nextLevel = getNextLevel(happiness);
+  const nextLevelIn = getFlowersToNextLevel(happiness);
+  const levelProgress = getProgressPercent(happiness);
 
   return {
     flowers,
-    level,
-    happiness: Math.min(100, 62 + fedFlowers * 4),
+    level: currentLevel.level,
+    happiness,
     nextLevelIn,
-    levelProgress: Math.min(100, Math.round((progressFlowers / petStarsPerLevel) * 100))
+    levelProgress,
+    currentLevel,
+    nextLevelLabel: nextLevel ? `Lv.${nextLevel.level} ${nextLevel.name}` : null
   };
 }
 

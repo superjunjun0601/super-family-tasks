@@ -1,7 +1,7 @@
 import { addDays, getNextWeekday, getTodayDate, toInputDate } from "@/lib/calendar-utils";
 import { childUserId, dadUserId, momUserId } from "@/lib/family-users";
 import { maxReminderDays, maxRewardStars, taskTitleMaxLength } from "@/lib/task-limits";
-import { getReminderLabel, getRepeatLabel, getRepeatWeekdayValue, repeatWeekdayValues } from "@/lib/task-time-label";
+import { formatDateLabel, getReminderLabel, getRepeatLabel, getRepeatWeekdayValue, repeatWeekdayValues } from "@/lib/task-time-label";
 import { childStudyCategory, familyCategory, importantPriority, normalPriority, personalCategory, urgentPriority } from "@/lib/task-values";
 import type { FamilyUser, Task, TaskDraft } from "@/lib/types";
 
@@ -9,7 +9,7 @@ export function parseQuickTask(text: string, currentUser: FamilyUser, defaultOwn
   const normalizedText = text.trim().replace(/^例如[:：]\s*/, "");
   const ownerIds = getQuickOwnerIds(normalizedText, currentUser, defaultOwnerId);
   const hasChildOwner = ownerIds.includes(childUserId);
-  const rewardMatch = normalizedText.match(/奖励\s*(\d+)\s*朵|(\d+)\s*朵小红花/);
+  const rewardMatch = normalizedText.match(/奖励\s*(\d+)\s*朵|(\d+)\s*朵(?:彩虹花|小红花)/);
   const rewardStars =
     hasChildOwner && currentUser.role !== childUserId && rewardMatch
       ? Math.min(maxRewardStars, Number(rewardMatch?.[1] ?? rewardMatch?.[2] ?? 1))
@@ -63,12 +63,16 @@ function getQuickOwnerIds(text: string, currentUser: FamilyUser, defaultOwnerId?
 }
 
 function getQuickDueLabel(text: string) {
+  const explicitDate = parseExplicitQuickDate(text);
+  if (explicitDate) return formatDateLabel(explicitDate);
   const timeMatch = text.match(/(今天|明天|后天|周[一二三四五六日天]|本周[一二三四五六日天]?|周末)(早上|上午|中午|下午|晚上|夜里)?\s*([0-2]?\d[:：点][0-5]?\d?)?/);
   if (!timeMatch) return "今天";
   return timeMatch[1];
 }
 
 function getQuickDateValue(text: string) {
+  const explicitDate = parseExplicitQuickDate(text);
+  if (explicitDate) return toInputDate(explicitDate);
   const dateMatch = text.match(/今天|明天|后天|本周[一二三四五六日天]?|周[一二三四五六日天]|周末/);
   const token = dateMatch?.[0] ?? "今天";
   const today = getTodayDate();
@@ -124,9 +128,47 @@ function getQuickRepeatLabel(text: string, repeatWeekdays?: number[]) {
 }
 
 function getQuickTitle(text: string) {
-  const withoutReward = text.replace(/奖励\s*\d+\s*朵/g, "").replace(/\d+\s*朵小红花/g, "");
+  const withoutReward = text.replace(/奖励\s*\d+\s*朵/g, "").replace(/\d+\s*朵(?:彩虹花|小红花)/g, "");
   const withoutReminder = withoutReward.replace(/提前\s*\d+\s*天提醒/g, "").replace(/提醒/g, "");
-  const withoutTime = withoutReminder.replace(/(今天|明天|后天|周[一二三四五六日天]|本周[一二三四五六日天]?|周末)(早上|上午|中午|下午|晚上|夜里)?\s*([0-2]?\d[:：点][0-5]?\d?)?/g, "");
+  const withoutExplicitDate = withoutReminder
+    .replace(/(?:([12]\d{3})年)?\d{1,2}月\d{1,2}(?:日|号)?/g, "")
+    .replace(/\d{1,2}[/-]\d{1,2}/g, "");
+  const withoutTime = withoutExplicitDate.replace(/(今天|明天|后天|周[一二三四五六日天]|本周[一二三四五六日天]?|周末)(早上|上午|中午|下午|晚上|夜里)?\s*([0-2]?\d[:：点][0-5]?\d?)?/g, "");
   const compact = withoutTime.replace(/^(妈妈|爸爸|小柚子|柚子|宝宝|宝贝|孩子)/, "").replace(/[，。,.]/g, " ").trim();
   return (compact || text.trim()).slice(0, taskTitleMaxLength);
+}
+
+function parseExplicitQuickDate(text: string) {
+  const normalized = text.replace(/\s+/g, "");
+  const yearMonthDayMatch = normalized.match(/(?:([12]\d{3})年)?(\d{1,2})月(\d{1,2})(?:日|号)?/);
+  if (yearMonthDayMatch) {
+    const year = Number(yearMonthDayMatch[1] ?? getTodayDate().getFullYear());
+    const month = Number(yearMonthDayMatch[2]);
+    const day = Number(yearMonthDayMatch[3]);
+    const parsedDate = createLocalDate(year, month, day);
+    if (parsedDate) return parsedDate;
+  }
+
+  const slashDateMatch = normalized.match(/(\d{1,2})[/-](\d{1,2})/);
+  if (slashDateMatch) {
+    const year = getTodayDate().getFullYear();
+    const month = Number(slashDateMatch[1]);
+    const day = Number(slashDateMatch[2]);
+    const parsedDate = createLocalDate(year, month, day);
+    if (parsedDate) return parsedDate;
+  }
+
+  return null;
+}
+
+function createLocalDate(year: number, month: number, day: number) {
+  const parsedDate = new Date(year, month - 1, day);
+  if (
+    parsedDate.getFullYear() !== year ||
+    parsedDate.getMonth() !== month - 1 ||
+    parsedDate.getDate() !== day
+  ) {
+    return null;
+  }
+  return parsedDate;
 }

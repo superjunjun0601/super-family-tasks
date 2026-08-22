@@ -251,7 +251,7 @@ export function TaskFormSheet({ currentUser, initialDraft, initialTask, mode, on
               </select>
             </Field>
             {canEditReward ? (
-              <Field label="小红花">
+              <Field label="彩虹花">
                 <input
                   className="form-input"
                   inputMode="numeric"

@@ -161,7 +161,7 @@ export function TaskCard({
             <div className="min-w-0 flex-1">
               <p className="text-[14px] font-bold text-[#5d42ae]">小柚子已完成，等待爸爸/妈妈确认</p>
               <p className="mt-0.5 text-[13px] leading-relaxed text-[var(--muted)]">
-                {task.rewardStars ? `确认后发放 ${task.rewardStars} 朵小红花。` : "确认后任务会正式完成。"}
+                {task.rewardStars ? `确认后发放 ${task.rewardStars} 朵彩虹花。` : "确认后任务会正式完成。"}
               </p>
             </div>
           </div>

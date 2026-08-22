@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type { CSSProperties, KeyboardEvent, ReactNode } from "react";
 import Image from "next/image";
 import {
   ArrowLeft,
@@ -75,6 +75,7 @@ import {
   type MainPage
 } from "@/lib/main-pages";
 import { getPetStats, type PetStats } from "@/lib/pet-stats";
+import { getCurrentLevel, type CurrentPetLevel } from "@/lib/pet-levels";
 import {
   createDefaultReminderSettings,
   overdueRemindersEnabledKey,
@@ -100,6 +101,7 @@ import {
 } from "@/lib/task-values";
 import { getTaskOwnerNames, isChildTask, isTaskOwner } from "@/lib/task-helpers";
 import { sortTasksByDate } from "@/lib/task-listing";
+import { shouldKeepTaskInTimeline } from "@/lib/task-retention";
 import {
   formatDateLabel,
   formatDateTimeLabel,
@@ -114,6 +116,14 @@ import type { FamilyUser, ReminderSettings, Task, TaskDraft, TaskStatus, TaskTim
 
 type PetStoreState = {
   fedFlowers: number;
+  updatedAt?: string;
+};
+
+type LocalPetSnapshot = {
+  completedTasks: string[];
+  fedFlowers: number;
+  flowers: number;
+  happiness: number;
   updatedAt?: string;
 };
 
@@ -172,7 +182,7 @@ type BackupResponse = {
 };
 
 type ListOwnerFilter = "all" | typeof momUserId | typeof dadUserId;
-type ListStatusFilter = typeof todoStatus | typeof doneStatus;
+type ListStatusFilter = "all" | typeof todoStatus | typeof doneStatus;
 type QuickCreateTarget = "current_user" | typeof childUserId;
 type HomeGroupKey = typeof overdueTimeBucket | typeof todayTimeBucket | typeof tomorrowTimeBucket | typeof dayAfterTimeBucket | typeof weekTimeBucket | "month" | "after_month";
 type CreationResult = {
@@ -181,8 +191,69 @@ type CreationResult = {
   tone: "danger" | "success";
 };
 
+type PetActivity = {
+  flowerDelta: number;
+  id: string;
+  kind: "feed" | "upgrade";
+  message: string;
+  tone: "success" | "magic";
+};
+
+type UpgradeResult = {
+  id: string;
+  level: CurrentPetLevel;
+  message: string;
+};
+
+type FeedParticle = {
+  delay: number;
+  distance: number;
+  id: string;
+  symbol: string;
+  x: number;
+  y: number;
+};
+
+type FeedMotion = {
+  endX: number;
+  endY: number;
+  id: string;
+  particles: FeedParticle[];
+  startX: number;
+  startY: number;
+};
+
 const monthHomeGroup = "month" satisfies HomeGroupKey;
 const afterMonthHomeGroup = "after_month" satisfies HomeGroupKey;
+
+const petFeedEncouragements = [
+  "小精灵好开心！",
+  "谢谢你的彩虹花！",
+  "你的努力让小精灵变亮啦！",
+  "再坚持一下，快升级啦！",
+  "学习的能量被小精灵收到啦！",
+  "今天也很棒哦！",
+  "小精灵正在悄悄长大！"
+];
+
+const fairyTalkMessages = [
+  "好喜欢你呀～",
+  "你的任务完成得很棒！",
+  "多给我送花吧，我会长得更快哦！",
+  "今天也要一起加油呀！",
+  "我收到你的努力能量啦！",
+  "彩虹花让我变得亮晶晶的～",
+  "你每完成一个任务，我都会很开心！",
+  "我会一直陪着你学习哦～",
+  "再坚持一下，我们快升级啦！",
+  "你真是我的好朋友！",
+  "学习的时候我在旁边给你加油！",
+  "送我彩虹花，我会开心得转圈圈～"
+];
+
+const petParticleSymbols = ["🌟", "✨", "💖", "🌸"];
+const petLocalStorageKey = "super-family-tasks:pet-progress";
+const legacyPetLocalStorageKeys = ["super-family-pet-state", "petState", "fairyState"];
 
 const homeGroups: { key: HomeGroupKey; label: string; title: string }[] = [
   { key: overdueTimeBucket, label: "逾期", title: "逾期任务" },
@@ -201,6 +272,7 @@ const ownerFilters: { key: ListOwnerFilter; label: string }[] = [
 ];
 
 const statusFilters: { key: ListStatusFilter; label: string }[] = [
+  { key: "all", label: "全部" },
   { key: todoStatus, label: "未完成" },
   { key: doneStatus, label: "已完成" }
 ];
@@ -224,19 +296,35 @@ export default function HomePage() {
   const [isFlowerHistoryOpen, setIsFlowerHistoryOpen] = useState(false);
   const [petState, setPetState] = useState<PetStoreState>({ fedFlowers: 0 });
   const [isFeedingPet, setIsFeedingPet] = useState(false);
+  const [petActivity, setPetActivity] = useState<PetActivity | null>(null);
+  const [upgradeResult, setUpgradeResult] = useState<UpgradeResult | null>(null);
+  const [displayedPetLevel, setDisplayedPetLevel] = useState<CurrentPetLevel>(() => getCurrentLevel(0));
   const [reminderSettings, setReminderSettings] = useState<ReminderSettings>(() => createDefaultReminderSettings());
   const [hasServerStateError, setHasServerStateError] = useState(false);
   const [notice, setNotice] = useState<{ message: string; tone: "danger" | "success" } | null>(null);
   const [loginNotice, setLoginNotice] = useState("");
   const [pendingTaskIds, setPendingTaskIds] = useState<Set<string>>(() => new Set());
   const pendingTaskIdsRef = useRef<Set<string>>(new Set());
+  const upgradeTimersRef = useRef<number[]>([]);
   const isMountedRef = useRef(false);
+
+  const clearUpgradeTimers = useCallback(() => {
+    upgradeTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    upgradeTimersRef.current = [];
+  }, []);
 
   useEffect(() => {
     if (!notice) return;
     const timer = window.setTimeout(() => setNotice(null), 3200);
     return () => window.clearTimeout(timer);
   }, [notice]);
+
+  useEffect(() => {
+    if (!petActivity) return;
+    const duration = petActivity.kind === "upgrade" ? 2600 : 2250;
+    const timer = window.setTimeout(() => setPetActivity(null), duration);
+    return () => window.clearTimeout(timer);
+  }, [petActivity]);
 
   const childTasks = useMemo(
     () => tasks.filter(isChildTask),
@@ -286,6 +374,12 @@ export default function HomePage() {
   const selectedTask = tasks.find((task) => task.id === selectedTaskId);
   const editingTask = tasks.find((task) => task.id === editingTaskId);
   const rewardConfirmTask = tasks.find((task) => task.id === rewardConfirmTaskId);
+
+  useEffect(() => {
+    if (isFeedingPet || petActivity?.kind === "upgrade") return;
+    setDisplayedPetLevel(petStats.currentLevel);
+  }, [isFeedingPet, petActivity?.kind, petStats.currentLevel]);
+
   const changeActivePage = useCallback(
     (page: MainPage) => {
       if (currentUser.role === childUserId && page !== babyPage && page !== mePage) {
@@ -301,8 +395,9 @@ export default function HomePage() {
     isMountedRef.current = true;
     return () => {
       isMountedRef.current = false;
+      clearUpgradeTimers();
     };
-  }, []);
+  }, [clearUpgradeTimers]);
 
   const resetLocalSessionState = useCallback(() => {
     setTasks([]);
@@ -318,10 +413,14 @@ export default function HomePage() {
     setIsFlowerHistoryOpen(false);
     setPetState({ fedFlowers: 0 });
     setIsFeedingPet(false);
+    setPetActivity(null);
+    setUpgradeResult(null);
+    setDisplayedPetLevel(getCurrentLevel(0));
+    clearUpgradeTimers();
     pendingTaskIdsRef.current = new Set();
     setPendingTaskIds(new Set());
     setHasServerStateError(false);
-  }, []);
+  }, [clearUpgradeTimers]);
 
   const handleSessionExpired = useCallback(() => {
     if (!isMountedRef.current) return;
@@ -334,12 +433,15 @@ export default function HomePage() {
   }, [resetLocalSessionState]);
 
   const loadServerState = useCallback(async () => {
+    let loadedTasks: Task[] | null = null;
+
     try {
       const [tasksData, trashData] = await Promise.all([
         apiRequest<{ tasks: Task[] }>(tasksApiPath),
         apiRequest<{ tasks: Task[] }>(trashApiPath)
       ]);
       if (!isMountedRef.current) return;
+      loadedTasks = tasksData.tasks;
       setHasServerStateError(false);
       setTasks(tasksData.tasks);
       setTrashTasks(trashData.tasks);
@@ -356,8 +458,16 @@ export default function HomePage() {
       const petData = await apiRequest<{ pet: PetStoreState }>(petApiPath);
       if (!isMountedRef.current) return;
       setPetState(petData.pet);
+      if (loadedTasks) writeLocalPetSnapshot(loadedTasks, petData.pet);
     } catch (error) {
       if (isUnauthorizedError(error)) handleSessionExpired();
+      const localSnapshot = readLocalPetSnapshot();
+      if (localSnapshot && isMountedRef.current) {
+        setPetState({
+          fedFlowers: localSnapshot.happiness,
+          updatedAt: localSnapshot.updatedAt
+        });
+      }
       // Pet progress should not block the task list.
     }
   }, [handleSessionExpired]);
@@ -406,12 +516,14 @@ export default function HomePage() {
 
   useEffect(() => {
     if (!isLoggedIn) return;
-    let ignore = false;
+    const localSnapshot = readLocalPetSnapshot();
+    if (localSnapshot) {
+      setPetState({
+        fedFlowers: localSnapshot.happiness,
+        updatedAt: localSnapshot.updatedAt
+      });
+    }
     void loadServerState();
-
-    return () => {
-      ignore = true;
-    };
   }, [currentUser.id, isLoggedIn, loadServerState]);
 
   useEffect(() => {
@@ -489,9 +601,9 @@ export default function HomePage() {
   }
 
   function requestFeedPet() {
-    if (isFeedingPet) return;
+    if (isFeedingPet || petActivity) return;
     if (petStats.flowers <= 0) {
-      showNotice("小红花不够啦，先完成任务攒一点。");
+      showNotice("先完成任务获得彩虹花吧！");
       return;
     }
     setIsFeedPetConfirmOpen(true);
@@ -541,7 +653,7 @@ export default function HomePage() {
       replaceTask(data.task);
       setRewardConfirmTaskId(null);
       showNotice(
-        task.rewardStars ? `已给小柚子 ${task.rewardStars} 朵小红花。` : "任务已确认完成。",
+        task.rewardStars ? `已给小柚子 ${task.rewardStars} 朵彩虹花。` : "任务已确认完成。",
         "success"
       );
       void loadServerState();
@@ -551,32 +663,71 @@ export default function HomePage() {
         handleSessionExpired();
         return;
       }
-      showNotice(task.rewardStars ? "小红花确认失败，请稍后再试。" : "任务确认失败，请稍后再试。");
+      showNotice(task.rewardStars ? "彩虹花确认失败，请稍后再试。" : "任务确认失败，请稍后再试。");
     } finally {
       setTaskPending(taskId, false);
     }
   }
 
-  async function feedPet() {
-    if (isFeedingPet) return;
-    if (petStats.flowers <= 0) {
-      showNotice("小红花不够啦，先完成任务攒一点。");
+  async function feedFlower(count = 1) {
+    if (isFeedingPet || petActivity) return;
+    const feedCount = Math.min(petStats.flowers, Math.max(1, Math.floor(count)));
+    if (petStats.flowers <= 0 || feedCount <= 0) {
+      showNotice("先完成任务获得彩虹花吧！");
       return;
     }
 
     const previousPetState = petState;
+    const previousLevel = petStats.currentLevel.level;
     setIsFeedingPet(true);
-    setPetState((current) => ({ ...current, fedFlowers: current.fedFlowers + 1 }));
+    setPetState((current) => ({ ...current, fedFlowers: current.fedFlowers + feedCount }));
 
     try {
       const data = await apiRequest<{ pet: PetStoreState }>(petFeedApiPath, {
+        body: { count: feedCount },
         method: "POST"
       });
       setPetState(data.pet);
+      writeLocalPetSnapshot(tasks, data.pet);
       setIsFeedPetConfirmOpen(false);
-      showNotice("已喂小精灵 1 朵小红花。", "success");
+      const nextLevel = getCurrentLevel(data.pet.fedFlowers);
+      const levelUp = nextLevel.level > previousLevel;
+      const encouragement = getRandomPetEncouragement();
+      if (levelUp) {
+        const result: UpgradeResult = {
+          id: createClientId(),
+          level: nextLevel,
+          message: encouragement
+        };
+        clearUpgradeTimers();
+        setPetActivity({
+          flowerDelta: feedCount,
+          id: result.id,
+          kind: "upgrade",
+          message: encouragement,
+          tone: "magic"
+        });
+        upgradeTimersRef.current = [
+          window.setTimeout(() => {
+            setDisplayedPetLevel(result.level);
+          }, 1800),
+          window.setTimeout(() => {
+            setUpgradeResult(result);
+          }, 2400)
+        ];
+      } else {
+        setPetActivity({
+          flowerDelta: feedCount,
+          id: createClientId(),
+          kind: "feed",
+          message: encouragement,
+          tone: "success"
+        });
+      }
+      if (!levelUp) showNotice(encouragement, "success");
     } catch (error) {
       setPetState(previousPetState);
+      clearUpgradeTimers();
       if (isUnauthorizedError(error)) {
         handleSessionExpired();
         return;
@@ -720,9 +871,7 @@ export default function HomePage() {
     return (
       <main className="app-shell grid min-h-screen place-items-center px-6">
         <div className="text-center">
-          <div className="mx-auto mb-4 grid h-12 w-12 place-items-center rounded-2xl bg-[linear-gradient(145deg,var(--primary),#7bbdaf)] font-extrabold text-white shadow-soft">
-            超
-          </div>
+          <LogoMark className="mx-auto mb-4 h-12 w-12" />
           <p className="text-[14px] font-bold text-[var(--muted)]">正在打开家庭清单...</p>
         </div>
       </main>
@@ -830,9 +979,11 @@ export default function HomePage() {
       {activePage === babyPage ? (
         <BabyPanel
           currentUser={currentUser}
+          petActivity={petActivity}
           pendingTaskIds={pendingTaskIds}
           tasks={childTasks}
           petStats={petStats}
+          displayedPetLevel={displayedPetLevel}
           isFeedingPet={isFeedingPet}
           onFeedPet={requestFeedPet}
           onConfirmReward={requestConfirmReward}
@@ -884,16 +1035,26 @@ export default function HomePage() {
           currentUser={currentUser}
           tasks={trashTasks}
           onBack={() => changeActivePage(mePage)}
-          onClear={async () => {
-            const confirmed = window.confirm("清空前会自动备份，但页面里不能直接撤回。确定清空回收站吗？");
+          onClear={async (taskIds) => {
+            const selectedTaskIds = taskIds?.length ? new Set(taskIds) : null;
+            const clearCount = selectedTaskIds ? selectedTaskIds.size : trashTasks.length;
+            if (!clearCount) return;
+            const confirmed = window.confirm(
+              selectedTaskIds
+                ? `清空选中的 ${clearCount} 条任务吗？清空前会自动备份，但页面里不能直接撤回。`
+                : "清空前会自动备份，但页面里不能直接撤回。确定清空回收站吗？"
+            );
             if (!confirmed) return;
             const previousTrashTasks = trashTasks;
-            setTrashTasks([]);
+            setTrashTasks((current) =>
+              selectedTaskIds ? current.filter((task) => !selectedTaskIds.has(task.id)) : []
+            );
             try {
               await apiRequest<{ ok: true }>(trashApiPath, {
+                body: selectedTaskIds ? { taskIds: Array.from(selectedTaskIds) } : undefined,
                 method: "DELETE"
               });
-              showNotice("回收站已清空，系统已自动备份。", "success");
+              showNotice(selectedTaskIds ? "选中的任务已清空，系统已自动备份。" : "回收站已清空，系统已自动备份。", "success");
             } catch (error) {
               setTrashTasks(previousTrashTasks);
               if (isUnauthorizedError(error)) {
@@ -1015,9 +1176,15 @@ export default function HomePage() {
           isPending={isFeedingPet}
           petStats={petStats}
           onCancel={() => setIsFeedPetConfirmOpen(false)}
-          onConfirm={() => {
-            void feedPet();
+          onConfirm={(count) => {
+            void feedFlower(count);
           }}
+        />
+      ) : null}
+      {upgradeResult ? (
+        <LevelUpModal
+          result={upgradeResult}
+          onClose={() => setUpgradeResult(null)}
         />
       ) : null}
       {isFlowerHistoryOpen ? (
@@ -1042,6 +1209,67 @@ function createChildTaskDraft(): TaskDraft {
   };
 }
 
+function readLocalPetSnapshot(): LocalPetSnapshot | null {
+  if (typeof window === "undefined") return null;
+
+  for (const key of [petLocalStorageKey, ...legacyPetLocalStorageKeys]) {
+    const rawValue = window.localStorage.getItem(key);
+    if (!rawValue) continue;
+    const snapshot = parseLocalPetSnapshot(rawValue);
+    if (snapshot) return snapshot;
+  }
+
+  return null;
+}
+
+function writeLocalPetSnapshot(tasks: Task[], petState: PetStoreState) {
+  if (typeof window === "undefined") return;
+
+  const childTasks = tasks.filter(isChildTask);
+  const stats = getPetStats(childTasks, petState.fedFlowers);
+  const snapshot: LocalPetSnapshot = {
+    completedTasks: childTasks.filter((task) => task.status === doneStatus).map((task) => task.id),
+    fedFlowers: petState.fedFlowers,
+    flowers: stats.flowers,
+    happiness: stats.happiness,
+    updatedAt: petState.updatedAt ?? new Date().toISOString()
+  };
+
+  try {
+    window.localStorage.setItem(petLocalStorageKey, JSON.stringify(snapshot));
+  } catch {
+    // Local cache is a convenience layer; server storage remains the source of truth.
+  }
+}
+
+function parseLocalPetSnapshot(rawValue: string): LocalPetSnapshot | null {
+  try {
+    const value = JSON.parse(rawValue) as Partial<LocalPetSnapshot> | null;
+    if (!value || typeof value !== "object") return null;
+
+    const happiness = getNonNegativeInteger(value.happiness);
+    const fedFlowers = getNonNegativeInteger(value.fedFlowers);
+    const normalizedHappiness = happiness ?? fedFlowers;
+    if (normalizedHappiness === null) return null;
+
+    return {
+      completedTasks: Array.isArray(value.completedTasks)
+        ? value.completedTasks.filter((taskId): taskId is string => typeof taskId === "string")
+        : [],
+      fedFlowers: normalizedHappiness,
+      flowers: getNonNegativeInteger(value.flowers) ?? 0,
+      happiness: normalizedHappiness,
+      updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : undefined
+    };
+  } catch {
+    return null;
+  }
+}
+
+function getNonNegativeInteger(value: unknown) {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
+}
+
 function getFlowerRewardEvents(tasks: Task[]): FlowerRewardEvent[] {
   return tasks
     .filter((task) => task.status === doneStatus && Boolean(task.rewardStars))
@@ -1050,7 +1278,7 @@ function getFlowerRewardEvents(tasks: Task[]): FlowerRewardEvent[] {
       return {
         id: task.id,
         giverName: getRewardGiverName(task),
-        reason: task.title,
+        reason: task.note?.trim() || task.title,
         stars: task.rewardStars ?? 0,
         timeLabel: rewardedAt ? formatDateTimeLabel(rewardedAt) : task.dueLabel || "时间未记录"
       };
@@ -1075,11 +1303,51 @@ function getRewardGiverName(task: Task) {
   return "爸爸妈妈";
 }
 
+function getRandomPetEncouragement() {
+  return petFeedEncouragements[Math.floor(Math.random() * petFeedEncouragements.length)] ?? petFeedEncouragements[0];
+}
+
+function getRandomFairyTalkMessage() {
+  return fairyTalkMessages[Math.floor(Math.random() * fairyTalkMessages.length)] ?? fairyTalkMessages[0];
+}
+
+function createPetFeedParticles(seed: string): FeedParticle[] {
+  const count = 10;
+  return Array.from({ length: count }, (_, index) => {
+    const angle = (Math.PI * 2 * index) / count + (index % 2 ? 0.24 : -0.16);
+    const distance = 62 + (index % 5) * 9;
+    return {
+      id: `${seed}-particle-${index}`,
+      symbol: petParticleSymbols[index % petParticleSymbols.length],
+      distance,
+      delay: 1300 + index * 24,
+      x: Math.cos(angle) * distance,
+      y: Math.sin(angle) * distance
+    };
+  });
+}
+
 function getCircularPosition(index: number, selectedIndex: number, total: number) {
   const offset = (index - selectedIndex + total) % total;
   if (offset === 0) return "center";
   if (offset === 1) return "right";
   return "left";
+}
+
+function LogoMark({ className }: { className?: string }) {
+  return (
+    <div className={["overflow-hidden rounded-[18px] shadow-soft ring-1 ring-black/5", className].join(" ")}>
+      <Image
+        alt="超人家族任务清单 logo"
+        className="h-full w-full object-cover"
+        height={56}
+        priority
+        sizes="56px"
+        src="/login-logo.png"
+        width={56}
+      />
+    </div>
+  );
 }
 
 function LoginScreen({
@@ -1099,17 +1367,20 @@ function LoginScreen({
 
   return (
     <main className="app-shell px-5 pb-7 pt-12">
-      <div className="mb-5 grid h-12 w-12 place-items-center rounded-2xl bg-[linear-gradient(145deg,var(--primary),#7bbdaf)] font-extrabold text-white shadow-soft">
-        超
+      <div className="translate-x-2.5">
+        <LogoMark className="mb-5 h-14 w-14" />
+        <div>
+          <h1 className="text-[30px] font-extrabold leading-[1.02] tracking-[-0.03em]">
+            超人家族
+            <br />
+            任务清单
+          </h1>
+          <p className="mt-4 whitespace-nowrap text-[14px] leading-none tracking-[-0.01em] text-[var(--muted)]">
+            每件事都有人回应，每个安排都稳稳落地。
+          </p>
+        </div>
       </div>
-      <h1 className="mb-2.5 text-[31px] font-extrabold leading-tight tracking-normal">
-        超人家族
-        <br />
-        任务清单
-      </h1>
-      <p className="mb-8 text-[15px] leading-relaxed text-[var(--muted)]">
-        家庭任务、小柚子学习计划和小红花奖励，先安安静静地放在一个地方。
-      </p>
+      <div className="h-11" />
 
       <form
         className="login-panel"
@@ -1310,7 +1581,7 @@ function RewardConfirmSheet({
         <h2 className="text-[19px] font-extrabold leading-tight" id={titleId}>确认完成奖励</h2>
         <p className="mt-2 text-[14px] leading-relaxed text-[var(--muted)]">
           {rewardCount > 0
-            ? `确认「${task.title}」后，会给小柚子 ${rewardCount} 朵小红花。`
+            ? `确认「${task.title}」后，会给小柚子 ${rewardCount} 朵彩虹花。`
             : `确认「${task.title}」后，任务会标记为已完成。`}
         </p>
         <div className="mt-4 grid grid-cols-2 gap-2.5">
@@ -1344,11 +1615,18 @@ function FeedPetConfirmSheet({
 }: {
   isPending: boolean;
   onCancel: () => void;
-  onConfirm: () => void;
+  onConfirm: (count: number) => void;
   petStats: PetStats;
 }) {
   const titleId = useId();
-  const remainingFlowers = Math.max(0, petStats.flowers - 1);
+  const maxFeedCount = Math.max(1, petStats.flowers);
+  const [feedCount, setFeedCount] = useState(1);
+  const selectedFeedCount = Math.min(feedCount, maxFeedCount);
+  const remainingFlowers = Math.max(0, petStats.flowers - selectedFeedCount);
+
+  useEffect(() => {
+    setFeedCount((current) => Math.min(Math.max(1, current), maxFeedCount));
+  }, [maxFeedCount]);
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-[rgba(36,48,47,0.24)] px-5 backdrop-blur-sm">
@@ -1358,14 +1636,40 @@ function FeedPetConfirmSheet({
         className="w-[min(100%,372px)] rounded-[22px] border border-[var(--border)] bg-[var(--surface)] p-4 shadow-[0_18px_48px_rgba(61,50,36,0.2)]"
         role="dialog"
       >
-        <div className="mb-3 grid h-11 w-11 place-items-center rounded-[14px] bg-[#eee8ff] text-[#5d42ae]">
-          <WandSparkles size={22} strokeWidth={2.7} />
+        <div className="mb-3 flex flex-col items-center text-center">
+          <div className="pet-feed-confirm-flower">
+            <Image alt="彩虹花" fill className="object-contain" sizes="76px" src="/pet-levels/flower.png" />
+          </div>
+          <h2 className="text-[19px] font-extrabold leading-tight" id={titleId}>喂小精灵吗？</h2>
         </div>
-        <h2 className="text-[19px] font-extrabold leading-tight" id={titleId}>喂小精灵吗？</h2>
-        <p className="mt-2 text-[14px] leading-relaxed text-[var(--muted)]">
-          这次会消耗 1 朵小红花。现在有 {petStats.flowers} 朵，喂完还剩 {remainingFlowers} 朵。
+        <p className="mt-2 text-center text-[14px] leading-relaxed text-[var(--muted)]">
+          这次会消耗 {selectedFeedCount} 朵彩虹花。现在有 {petStats.flowers} 朵，喂完还剩 {remainingFlowers} 朵。
         </p>
-        <div className="mt-4 grid grid-cols-2 gap-2.5">
+        <div className="mt-4 flex items-center justify-center gap-5">
+          <button
+            aria-label="减少一朵"
+            className="grid h-10 w-10 place-items-center rounded-[13px] border border-[var(--border)] bg-white text-[22px] font-extrabold text-[var(--text)] disabled:opacity-35"
+            disabled={isPending || selectedFeedCount <= 1}
+            onClick={() => setFeedCount((current) => Math.max(1, current - 1))}
+            type="button"
+          >
+            -
+          </button>
+          <div className="min-w-[92px] text-center">
+            <strong className="block text-[24px] leading-none text-[#5d42ae]">{selectedFeedCount}</strong>
+            <span className="mt-1 block text-[12px] font-bold text-[var(--muted)]">朵彩虹花</span>
+          </div>
+          <button
+            aria-label="增加一朵"
+            className="grid h-10 w-10 place-items-center rounded-[13px] border border-[var(--border)] bg-white text-[22px] font-extrabold text-[var(--text)] disabled:opacity-35"
+            disabled={isPending || selectedFeedCount >= petStats.flowers}
+            onClick={() => setFeedCount((current) => Math.min(petStats.flowers, current + 1))}
+            type="button"
+          >
+            +
+          </button>
+        </div>
+        <div className="mt-7 grid grid-cols-2 gap-2.5">
           <button
             className="h-11 rounded-xl border border-[var(--border)] bg-[#fffaf1] font-bold text-[var(--text)] disabled:opacity-45"
             disabled={isPending}
@@ -1377,12 +1681,49 @@ function FeedPetConfirmSheet({
           <button
             className="h-11 rounded-xl border border-transparent bg-[linear-gradient(135deg,#9a7bea,#f2b56b)] font-bold text-white shadow-soft disabled:opacity-45"
             disabled={isPending || petStats.flowers <= 0}
-            onClick={onConfirm}
+            onClick={() => onConfirm(selectedFeedCount)}
             type="button"
           >
             {isPending ? "喂养中..." : "确认喂养"}
           </button>
         </div>
+      </section>
+    </div>
+  );
+}
+
+function LevelUpModal({
+  onClose,
+  result
+}: {
+  onClose: () => void;
+  result: UpgradeResult;
+}) {
+  const titleId = useId();
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-[rgba(54,39,72,0.26)] px-5 backdrop-blur-sm">
+      <section
+        aria-labelledby={titleId}
+        aria-modal="true"
+        className="pet-upgrade-dialog w-[min(100%,372px)] rounded-[28px] border border-[rgba(255,255,255,0.72)] bg-[linear-gradient(145deg,#fff5fb_0%,#fff1c8_48%,#eee8ff_100%)] p-5 text-center shadow-[0_22px_58px_rgba(119,78,138,0.24)]"
+        role="dialog"
+      >
+        <div className="mx-auto mb-3 grid h-14 w-14 place-items-center rounded-[20px] bg-[linear-gradient(135deg,#ffd7ee,#fff0b7,#dcd0ff)] text-[#7b55c7] shadow-[0_12px_26px_rgba(154,123,234,0.18)]">
+          <WandSparkles size={23} strokeWidth={2.7} />
+        </div>
+        <h2 className="text-[20px] font-extrabold leading-tight text-[#5d42ae]" id={titleId}>小精灵升级啦！</h2>
+        <p className="mt-3 text-[15px] font-extrabold leading-relaxed text-[#7b4d9f]">
+          恭喜你，小精灵成长为 Lv.{result.level.level} {result.level.name}！
+        </p>
+        <p className="mt-2 text-[14px] font-bold leading-relaxed text-[#9a6a25]">继续完成任务，收集更多彩虹花吧。</p>
+        <button
+          className="mt-5 h-11 w-full rounded-[16px] border border-transparent bg-[linear-gradient(135deg,#f7a8d8,#f2c86b,#9a7bea)] font-extrabold text-white shadow-[0_12px_26px_rgba(154,123,234,0.24)]"
+          onClick={onClose}
+          type="button"
+        >
+          太棒啦
+        </button>
       </section>
     </div>
   );
@@ -1409,11 +1750,11 @@ function FlowerHistorySheet({
       >
         <div className="flex items-start justify-between gap-3 border-b border-[var(--border)] px-4 py-4">
           <div>
-            <p className="text-[13px] font-bold text-[#a5601f]">现在有 {petStats.flowers} 朵小红花</p>
-            <h2 className="mt-0.5 text-[19px] font-extrabold leading-tight" id={titleId}>小红花通知</h2>
+            <p className="text-[13px] font-bold text-[#a5601f]">现在有 {petStats.flowers} 朵彩虹花</p>
+            <h2 className="mt-0.5 text-[19px] font-extrabold leading-tight" id={titleId}>彩虹花通知</h2>
           </div>
           <button
-            aria-label="关闭小红花通知"
+            aria-label="关闭彩虹花通知"
             className="grid h-10 w-10 flex-none place-items-center rounded-xl border border-[var(--border)] bg-[#fffaf1] text-[var(--muted)]"
             onClick={onClose}
             type="button"
@@ -1433,7 +1774,7 @@ function FlowerHistorySheet({
                   <div className="mb-1.5 flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <h3 className="truncate text-[15px] font-extrabold text-[var(--text)]">
-                        {event.giverName}送你 {event.stars} 朵小红花
+                        {event.giverName}送你 {event.stars} 朵彩虹花
                       </h3>
                       <p className="mt-0.5 text-[12px] font-semibold text-[var(--faint)]">{event.timeLabel}</p>
                     </div>
@@ -1447,7 +1788,7 @@ function FlowerHistorySheet({
             </div>
           ) : (
             <div className="rounded-[18px] border border-dashed border-[rgba(231,222,210,0.9)] bg-[rgba(255,250,241,0.62)] px-4 py-8 text-center">
-              <p className="text-[15px] font-extrabold text-[var(--text)]">还没有收到小红花</p>
+              <p className="text-[15px] font-extrabold text-[var(--text)]">还没有收到彩虹花</p>
               <p className="mt-1 text-[13px] leading-relaxed text-[var(--muted)]">
                 完成任务后，爸爸妈妈确认奖励，这里就会出现记录。
               </p>
@@ -1715,15 +2056,17 @@ function getHomeGroupKey(task: Pick<Task, "dueDate" | "status" | "taskDate" | "t
   if (!taskDate) return afterMonthHomeGroup;
 
   const today = getTodayDate();
+  const isSameMonth =
+    taskDate.getFullYear() === today.getFullYear() &&
+    taskDate.getMonth() === today.getMonth();
+  if (!isSameMonth) return afterMonthHomeGroup;
+
   const todayWeekday = today.getDay() || 7;
   const weekEnd = new Date(today);
   weekEnd.setDate(today.getDate() + (7 - todayWeekday));
   if (taskDate.getTime() <= weekEnd.getTime()) return weekTimeBucket;
 
-  const isSameMonth =
-    taskDate.getFullYear() === today.getFullYear() &&
-    taskDate.getMonth() === today.getMonth();
-  return isSameMonth ? monthHomeGroup : afterMonthHomeGroup;
+  return monthHomeGroup;
 }
 
 function EmptyState({ description, title }: { description: string; title: string }) {
@@ -1755,20 +2098,66 @@ function ListPanel({
   const [query, setQuery] = useState("");
   const [ownerFilter, setOwnerFilter] = useState<ListOwnerFilter>("all");
   const [statusFilter, setStatusFilter] = useState<ListStatusFilter>(todoStatus);
+  const [isFilterPinned, setIsFilterPinned] = useState(false);
   const normalizedQuery = query.trim().toLowerCase();
   const visibleTasks = sortTasksByDate(
     tasks.filter((task) => {
+      if (!shouldKeepTaskInTimeline(task)) return false;
       const matchesQuery =
         !normalizedQuery ||
         task.title.toLowerCase().includes(normalizedQuery) ||
         task.note.toLowerCase().includes(normalizedQuery);
       const matchesOwner = ownerFilter === "all" || isTaskOwner(task, ownerFilter);
-      const matchesStatus = statusFilter === doneStatus ? task.status === doneStatus : task.status !== doneStatus;
+      const matchesStatus =
+        statusFilter === "all"
+          ? true
+          : statusFilter === doneStatus
+            ? task.status === doneStatus
+            : task.status !== doneStatus;
 
       return matchesQuery && matchesOwner && matchesStatus;
     })
   );
   const timelineGroups = groupTasksByTimelineDate(visibleTasks);
+
+  useEffect(() => {
+    const updatePinnedState = () => {
+      setIsFilterPinned(window.scrollY > 120);
+    };
+
+    updatePinnedState();
+    window.addEventListener("scroll", updatePinnedState, { passive: true });
+    window.addEventListener("resize", updatePinnedState);
+    return () => {
+      window.removeEventListener("scroll", updatePinnedState);
+      window.removeEventListener("resize", updatePinnedState);
+    };
+  }, []);
+
+  const filterTabs = (
+    <div className="grid gap-1 rounded-[13px] border border-[rgba(231,222,210,0.82)] bg-[rgba(255,253,248,0.94)] p-1.5 shadow-[0_12px_30px_rgba(61,50,36,0.08)]">
+      <div className="flex flex-wrap gap-1 overflow-x-auto">
+        {ownerFilters.map((filter) => (
+          <FilterChip
+            active={ownerFilter === filter.key}
+            key={filter.key}
+            label={filter.label}
+            onClick={() => setOwnerFilter(filter.key)}
+          />
+        ))}
+      </div>
+      <div className="flex flex-wrap gap-1 overflow-x-auto">
+        {statusFilters.map((filter) => (
+          <FilterChip
+            active={statusFilter === filter.key}
+            key={filter.key}
+            label={filter.label}
+            onClick={() => setStatusFilter(filter.key)}
+          />
+        ))}
+      </div>
+    </div>
+  );
 
   return (
     <section className="px-4 pt-[18px]">
@@ -1783,34 +2172,22 @@ function ListPanel({
             onChange={(event) => setQuery(event.target.value)}
           />
         </label>
-        <div className="grid gap-1.5 rounded-[13px] border border-[rgba(231,222,210,0.72)] bg-[rgba(255,253,248,0.58)] p-1.5">
-          <div className="flex gap-1.5 overflow-x-auto">
-            {ownerFilters.map((filter) => (
-              <FilterChip
-                active={ownerFilter === filter.key}
-                key={filter.key}
-                label={filter.label}
-                onClick={() => setOwnerFilter(filter.key)}
-              />
-            ))}
-          </div>
-          <div className="flex gap-1.5 overflow-x-auto">
-            {statusFilters.map((filter) => (
-              <FilterChip
-                active={statusFilter === filter.key}
-                key={filter.key}
-                label={filter.label}
-                onClick={() => setStatusFilter(filter.key)}
-              />
-            ))}
-          </div>
+        {isFilterPinned ? <div aria-hidden="true" className="h-[76px]" /> : null}
+        <div
+          className={
+            isFilterPinned
+              ? "fixed left-1/2 top-2 z-30 w-[min(calc(100vw-32px),398px)] -translate-x-1/2 border-b border-[rgba(231,222,210,0.55)] bg-[linear-gradient(180deg,rgba(248,244,236,0.97),rgba(248,244,236,0.92))] pb-3 pt-2 backdrop-blur-xl"
+              : "border-b border-[rgba(231,222,210,0.55)] bg-[linear-gradient(180deg,rgba(248,244,236,0.97),rgba(248,244,236,0.92))] pb-3 pt-2 backdrop-blur-xl"
+          }
+        >
+          {filterTabs}
         </div>
       </div>
 
       {timelineGroups.length ? (
         <div className="relative grid gap-[15px] pl-4 before:absolute before:left-[5px] before:bottom-2 before:top-3 before:w-px before:bg-[rgba(79,157,143,0.18)]">
           {timelineGroups.map((group) => (
-            <section className="relative" key={group.key}>
+            <section className="relative scroll-mt-8" id={`timeline-group-${group.key}`} key={group.key}>
               <div className="mb-2 flex items-center justify-between gap-3">
                 <span className="absolute -left-[13px] top-[7px] h-[9px] w-[9px] rounded-full border-2 border-[var(--bg)] bg-[var(--primary)]" />
                 <h2 className="text-[15px] font-extrabold leading-tight text-[var(--text)]">{group.label}</h2>
@@ -1950,7 +2327,7 @@ function RemindersPanel({
           <ReminderSection
             accent="magic"
             count={pendingRewardTasks.length}
-            description="小柚子勾选完成后，爸爸或妈妈确认一下；有奖励的任务会同时发小红花。"
+            description="小柚子勾选完成后，爸爸或妈妈确认一下；有奖励的任务会同时发彩虹花。"
             title="待确认小柚子任务"
           >
             {pendingRewardTasks.map((task) => (
@@ -2043,7 +2420,7 @@ function FilterChip({
   return (
     <button
       className={[
-        "h-8 flex-none rounded-[10px] border px-3 text-[13px] font-bold",
+        "h-7 flex-none rounded-[9px] border px-2.5 text-[12px] font-bold",
         active
           ? "border-[rgba(79,157,143,0.28)] bg-[rgba(221,239,234,0.76)] text-[#1e7f64]"
           : "border-transparent bg-transparent text-[#87918e]"
@@ -2058,6 +2435,8 @@ function FilterChip({
 
 function BabyPanel({
   currentUser,
+  displayedPetLevel,
+  petActivity,
   pendingTaskIds,
   tasks,
   petStats,
@@ -2069,6 +2448,8 @@ function BabyPanel({
   onToggle
 }: {
   currentUser: FamilyUser;
+  displayedPetLevel: CurrentPetLevel;
+  petActivity: PetActivity | null;
   pendingTaskIds: Set<string>;
   tasks: Task[];
   petStats: PetStats;
@@ -2080,6 +2461,107 @@ function BabyPanel({
   onToggle: (id: string) => void;
 }) {
   const sortedTasks = sortTasksByDate(tasks);
+  const petCardRef = useRef<HTMLDivElement | null>(null);
+  const petSpriteRef = useRef<HTMLDivElement | null>(null);
+  const feedButtonRef = useRef<HTMLButtonElement | null>(null);
+  const [feedMotion, setFeedMotion] = useState<FeedMotion | null>(null);
+  const [displayedHappiness, setDisplayedHappiness] = useState(petStats.happiness);
+  const [isHappinessRolling, setIsHappinessRolling] = useState(false);
+  const happinessRollTimersRef = useRef<number[]>([]);
+  const happinessRollFrameRef = useRef<number | null>(null);
+  const pendingHappinessTargetRef = useRef<number | null>(null);
+  const lastHappinessActivityIdRef = useRef<string | null>(null);
+
+  const clearHappinessRollTimers = useCallback(() => {
+    happinessRollTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    happinessRollTimersRef.current = [];
+    if (happinessRollFrameRef.current) {
+      window.cancelAnimationFrame(happinessRollFrameRef.current);
+      happinessRollFrameRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!petActivity) return;
+    if (petActivity.kind !== "feed" && petActivity.kind !== "upgrade") return;
+
+    const card = petCardRef.current;
+    const sprite = petSpriteRef.current;
+    const button = feedButtonRef.current;
+    if (!card || !sprite || !button) return;
+
+    const cardRect = card.getBoundingClientRect();
+    const spriteRect = sprite.getBoundingClientRect();
+    const buttonRect = button.getBoundingClientRect();
+    const motion: FeedMotion = {
+      id: petActivity.id,
+      startX: buttonRect.left + buttonRect.width / 2 - cardRect.left,
+      startY: buttonRect.top + buttonRect.height / 2 - cardRect.top,
+      endX: spriteRect.left + spriteRect.width / 2 - cardRect.left,
+      endY: spriteRect.top + spriteRect.height / 2 - cardRect.top,
+      particles: createPetFeedParticles(petActivity.id)
+    };
+
+    setFeedMotion(motion);
+    const timer = window.setTimeout(() => {
+      setFeedMotion((current) => (current?.id === petActivity.id ? null : current));
+    }, petActivity.kind === "upgrade" ? 2600 : 2250);
+
+    return () => window.clearTimeout(timer);
+  }, [petActivity]);
+
+  useEffect(() => {
+    return () => clearHappinessRollTimers();
+  }, [clearHappinessRollTimers]);
+
+  useEffect(() => {
+    if (isFeedingPet) return;
+
+    if (
+      petActivity &&
+      petStats.happiness > displayedHappiness &&
+      lastHappinessActivityIdRef.current !== petActivity.id
+    ) {
+      const startValue = displayedHappiness;
+      const endValue = petStats.happiness;
+      const startDelay = petActivity.kind === "upgrade" ? 2600 : 2250;
+      lastHappinessActivityIdRef.current = petActivity.id;
+      pendingHappinessTargetRef.current = endValue;
+      clearHappinessRollTimers();
+
+      const startTimer = window.setTimeout(() => {
+        const startedAt = window.performance.now();
+        const duration = 680;
+        setIsHappinessRolling(true);
+
+        const roll = (now: number) => {
+          const progress = Math.min(1, (now - startedAt) / duration);
+          const easedProgress = 1 - Math.pow(1 - progress, 3);
+          setDisplayedHappiness(Math.round(startValue + (endValue - startValue) * easedProgress));
+
+          if (progress < 1) {
+            happinessRollFrameRef.current = window.requestAnimationFrame(roll);
+            return;
+          }
+
+          setDisplayedHappiness(endValue);
+          setIsHappinessRolling(false);
+          pendingHappinessTargetRef.current = null;
+          happinessRollFrameRef.current = null;
+        };
+
+        happinessRollFrameRef.current = window.requestAnimationFrame(roll);
+      }, startDelay);
+
+      happinessRollTimersRef.current = [startTimer];
+      return;
+    }
+
+    if (!petActivity && pendingHappinessTargetRef.current === null && displayedHappiness !== petStats.happiness) {
+      setDisplayedHappiness(petStats.happiness);
+      setIsHappinessRolling(false);
+    }
+  }, [clearHappinessRollTimers, displayedHappiness, isFeedingPet, petActivity, petStats.happiness]);
 
   return (
     <section className="px-4 pt-[18px]">
@@ -2088,46 +2570,65 @@ function BabyPanel({
         title="小精灵今天很期待"
         action={<QuickAddButton onClick={onCreate} />}
       />
-      <div className="mb-4 rounded-[22px] border border-[rgba(154,123,234,0.22)] bg-[linear-gradient(140deg,#eee8ff_0%,#fff7df_52%,#ddefea_100%)] p-[18px] shadow-soft">
-        <h3 className="mb-1.5 text-[16px] font-bold leading-snug">梦幻小精灵</h3>
+      <div
+        className="relative mb-4 overflow-hidden rounded-[22px] border border-[rgba(154,123,234,0.22)] bg-[linear-gradient(140deg,#eee8ff_0%,#fff7df_52%,#ddefea_100%)] p-[18px] shadow-soft"
+        ref={petCardRef}
+      >
+        <h3 className="mb-1.5 text-[16px] font-bold leading-snug">{petStats.currentLevel.name}</h3>
         <p className="text-[14px] leading-relaxed text-[var(--muted)]">
-          喂一朵小红花，它会变得更开心。
+          {petStats.currentLevel.description}
         </p>
-        <MagicSprite />
+        <div ref={petSpriteRef}>
+          <PetSprite activity={petActivity} isFeeding={isFeedingPet} level={displayedPetLevel} />
+        </div>
         <div className="mb-3 rounded-[15px] border border-[rgba(255,255,255,0.74)] bg-[rgba(255,253,248,0.56)] p-3">
           <div className="mb-2 flex items-center justify-between gap-3 text-[13px]">
-            <span className="font-bold text-[#5d42ae]">等级 {petStats.level}</span>
-            <span className="text-[var(--muted)]">距离下一级还差 {petStats.nextLevelIn} 朵</span>
+            <span className="font-bold text-[#5d42ae]">等级 {petStats.currentLevel.level}</span>
+            <span className="text-[var(--muted)]">
+              {petStats.nextLevelLabel ? `距离下一级还差 ${petStats.nextLevelIn} 朵` : "已经满级啦"}
+            </span>
           </div>
           <div className="h-2.5 overflow-hidden rounded-full bg-[rgba(154,123,234,0.16)]">
-            <div
-              className="h-full rounded-full bg-[linear-gradient(90deg,#9a7bea,#f2b56b,#71c3b6)]"
-              style={{ width: `${petStats.levelProgress}%` }}
-            />
+            <div className="h-full rounded-full bg-[linear-gradient(90deg,#9a7bea,#f2b56b,#71c3b6)]" style={{ width: `${petStats.levelProgress}%` }} />
           </div>
         </div>
         <div className="grid grid-cols-3 gap-2">
           {[
-            [String(petStats.flowers), "小红花"],
-            [String(petStats.level), "等级"],
-            [String(petStats.happiness), "开心值"]
+            [String(petStats.flowers), "当前可用彩虹花"],
+            [String(petStats.currentLevel.level), "当前等级"],
+            [String(displayedHappiness), "开心值"]
           ].map(([value, label]) => (
             <div
-              className="rounded-[13px] border border-[rgba(231,222,210,0.75)] bg-[rgba(255,253,248,0.72)] p-2.5"
+              className="relative overflow-hidden rounded-[13px] border border-[rgba(231,222,210,0.75)] bg-[rgba(255,253,248,0.72)] p-2.5"
               key={label}
             >
-              <strong className="mb-0.5 block text-lg">{value}</strong>
+              <strong
+                className={[
+                  "mb-0.5 block text-lg",
+                  label === "开心值" && isHappinessRolling ? "pet-happiness-value-rolling" : ""
+                ].join(" ")}
+              >
+                {value}
+              </strong>
               <span className="text-[12px] text-[var(--muted)]">{label}</span>
             </div>
           ))}
         </div>
+        <div className="pet-feed-motion-layer">
+          <FloatingFlower motion={feedMotion} />
+          <FairyParticles motion={feedMotion} />
+        </div>
         <button
-          className="mt-3 min-h-12 w-full rounded-[14px] border border-transparent bg-[linear-gradient(135deg,#9a7bea,#f2b56b)] px-4 text-[15px] font-extrabold text-white shadow-soft disabled:opacity-45"
-          disabled={petStats.flowers <= 0 || isFeedingPet}
+          className={[
+            "mt-3 min-h-12 w-full rounded-[14px] border border-transparent bg-[linear-gradient(135deg,#9a7bea,#f2b56b)] px-4 text-[15px] font-extrabold text-white shadow-soft disabled:opacity-45",
+            isFeedingPet || petActivity ? "pet-feed-button-active" : ""
+          ].join(" ")}
+          disabled={petStats.flowers <= 0 || isFeedingPet || Boolean(petActivity)}
           onClick={onFeedPet}
+          ref={feedButtonRef}
           type="button"
         >
-          {isFeedingPet ? "喂养中..." : "喂一朵小红花"}
+          {isFeedingPet ? "喂养中..." : petStats.flowers > 0 ? "喂一朵彩虹花" : "先去完成任务吧"}
         </button>
       </div>
 
@@ -2157,29 +2658,193 @@ function BabyPanel({
   );
 }
 
-function MagicSprite() {
+function PetSprite({
+  activity,
+  isFeeding,
+  level
+}: {
+  activity: PetActivity | null;
+  isFeeding: boolean;
+  level: PetStats["currentLevel"];
+}) {
+  const [speech, setSpeech] = useState<{ id: string; text: string } | null>(null);
+  const [tapAnimationId, setTapAnimationId] = useState("");
+  const speechTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (speechTimerRef.current) window.clearTimeout(speechTimerRef.current);
+    };
+  }, []);
+
+  const handleFairyTap = useCallback(() => {
+    if (speechTimerRef.current) window.clearTimeout(speechTimerRef.current);
+    const nextSpeech = {
+      id: createClientId(),
+      text: getRandomFairyTalkMessage()
+    };
+    setSpeech(nextSpeech);
+    setTapAnimationId(nextSpeech.id);
+    speechTimerRef.current = window.setTimeout(() => {
+      setSpeech((current) => (current?.id === nextSpeech.id ? null : current));
+    }, 2800);
+  }, []);
+
+  const handleFairyKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLButtonElement>) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      handleFairyTap();
+    },
+    [handleFairyTap]
+  );
+
   return (
-    <div aria-label="梦幻小精灵" className="magic-sprite-stage" role="img">
-      <span className="magic-sparkle magic-sparkle-one" />
-      <span className="magic-sparkle magic-sparkle-two" />
-      <span className="magic-sparkle magic-sparkle-three" />
-      <div className="magic-sprite">
-        <span className="magic-wing magic-wing-left" />
-        <span className="magic-wing magic-wing-right" />
-        <span className="magic-antenna magic-antenna-left" />
-        <span className="magic-antenna magic-antenna-right" />
-        <span className="magic-ear magic-ear-left" />
-        <span className="magic-ear magic-ear-right" />
-        <span className="magic-body">
-          <span className="magic-forehead" />
-          <span className="magic-eye magic-eye-left" />
-          <span className="magic-eye magic-eye-right" />
-          <span className="magic-cheek magic-cheek-left" />
-          <span className="magic-cheek magic-cheek-right" />
-          <span className="magic-smile" />
+    <div
+      aria-label={level.label}
+      className={[
+        "pet-sprite-stage",
+        isFeeding ? "pet-sprite-stage-feeding" : "",
+        activity?.kind === "feed" ? "pet-sprite-stage-happy" : "",
+        activity?.kind === "upgrade" ? "pet-sprite-stage-upgrade" : ""
+      ].join(" ")}
+      role="group"
+    >
+      {activity ? (
+        <span
+          className={[
+            "pet-encouragement-bubble",
+            activity.tone === "magic" ? "pet-encouragement-bubble-magic" : ""
+          ].join(" ")}
+          key={activity.id}
+        >
+          {activity.message}
         </span>
-      </div>
+      ) : null}
+      {speech ? (
+        <span className="fairy-speech-bubble" key={speech.id}>
+          {speech.text}
+        </span>
+      ) : null}
+      {activity ? (
+        <span className="pet-fairy-delta" key={`fairy-delta-${activity.id}`}>
+          +{activity.flowerDelta}
+        </span>
+      ) : null}
+      <span className="pet-sprite-halo" />
+      <span className="fairy-dream-aura" aria-hidden="true">
+        <span className="fairy-dream-orb" />
+        <span className="fairy-dream-ring" />
+        <span className="fairy-dream-star fairy-dream-star-one" />
+        <span className="fairy-dream-star fairy-dream-star-two" />
+        <span className="fairy-dream-star fairy-dream-star-three" />
+        <span className="fairy-dream-star fairy-dream-star-four" />
+      </span>
+      <span className="fairy-dream-decorations" aria-hidden="true">
+        <span className="fairy-orbit fairy-orbit-one">
+          <span className="fairy-orbit-dot fairy-orbit-dot-a" />
+          <span className="fairy-orbit-dot fairy-orbit-dot-b" />
+          <span className="fairy-orbit-dot fairy-orbit-dot-c" />
+        </span>
+        <span className="fairy-orbit fairy-orbit-two">
+          <span className="fairy-orbit-dot fairy-orbit-dot-d" />
+          <span className="fairy-orbit-dot fairy-orbit-dot-e" />
+        </span>
+        <span className="fairy-deco fairy-deco-star fairy-deco-one">✨</span>
+        <span className="fairy-deco fairy-deco-star fairy-deco-two">✦</span>
+        <span className="fairy-deco fairy-deco-heart fairy-deco-three">💖</span>
+        <span className="fairy-deco fairy-deco-heart fairy-deco-four">♡</span>
+        <span className="fairy-deco fairy-deco-flower fairy-deco-five">🌸</span>
+        <span className="fairy-deco fairy-deco-flower fairy-deco-six">❀</span>
+        <span className="fairy-deco fairy-deco-dot fairy-deco-seven" />
+        <span className="fairy-deco fairy-deco-dot fairy-deco-eight" />
+        <span className="fairy-deco fairy-deco-bubble fairy-deco-nine" />
+        <span className="fairy-deco fairy-deco-bubble fairy-deco-ten" />
+        <span className="fairy-deco fairy-deco-dot fairy-deco-eleven" />
+      </span>
+      {activity?.kind === "upgrade" ? (
+        <span className="pet-transform-sparkles" aria-hidden="true">
+          <span className="pet-transform-sparkle pet-transform-sparkle-one">✨</span>
+          <span className="pet-transform-sparkle pet-transform-sparkle-two">💖</span>
+          <span className="pet-transform-sparkle pet-transform-sparkle-three">🌸</span>
+          <span className="pet-transform-sparkle pet-transform-sparkle-four">⭐</span>
+          <span className="pet-transform-sparkle pet-transform-sparkle-five">✨</span>
+          <span className="pet-transform-sparkle pet-transform-sparkle-six">💫</span>
+        </span>
+      ) : null}
+      <button
+        aria-label="点击小精灵互动"
+        className="pet-sprite-touch-target"
+        onClick={handleFairyTap}
+        onKeyDown={handleFairyKeyDown}
+        type="button"
+      >
+        <div className="pet-sprite-float">
+          <div
+            className={[
+              "pet-sprite-interactive",
+              tapAnimationId ? "pet-sprite-interactive-tap" : ""
+            ].join(" ")}
+            key={tapAnimationId || "fairy-idle"}
+          >
+            <div
+              className="pet-sprite-frame"
+              key={activity?.kind === "upgrade" ? activity.id : `${level.image}-${activity?.id ?? "idle"}`}
+            >
+              <Image alt={level.label} fill className="pet-sprite-image" priority sizes="(max-width: 430px) 72vw, 280px" src={level.image} />
+            </div>
+          </div>
+        </div>
+      </button>
     </div>
+  );
+}
+
+function FloatingFlower({ motion }: { motion: FeedMotion | null }) {
+  if (!motion) return null;
+
+  const flowerStyle = {
+    "--pet-feed-start-x": `${motion.startX}px`,
+    "--pet-feed-start-y": `${motion.startY}px`,
+    "--pet-feed-mid-x": `${(motion.startX + motion.endX) / 2}px`,
+    "--pet-feed-mid-y": `${(motion.startY + motion.endY) / 2 - 54}px`,
+    "--pet-feed-end-x": `${motion.endX}px`,
+    "--pet-feed-end-y": `${motion.endY}px`
+  } as CSSProperties;
+
+  return (
+    <span className="pet-feed-flying-flower" style={flowerStyle}>
+      <Image alt="" fill sizes="68px" src="/pet-levels/flower.png" />
+    </span>
+  );
+}
+
+function FairyParticles({ motion }: { motion: FeedMotion | null }) {
+  if (!motion) return null;
+
+  const centerStyle = {
+    "--pet-feed-end-x": `${motion.endX}px`,
+    "--pet-feed-end-y": `${motion.endY}px`
+  } as CSSProperties;
+
+  return (
+    <>
+      <span className="pet-feed-rainbow-ring" style={centerStyle} />
+      {motion.particles.map((particle) => {
+        const particleStyle = {
+          ...centerStyle,
+          "--pet-particle-x": `${particle.x}px`,
+          "--pet-particle-y": `${particle.y}px`,
+          "--pet-particle-delay": `${particle.delay}ms`
+        } as CSSProperties;
+
+        return (
+          <span className="pet-feed-particle" key={particle.id} style={particleStyle}>
+            {particle.symbol}
+          </span>
+        );
+      })}
+    </>
   );
 }
 
@@ -2266,7 +2931,7 @@ function MePanel({
 function IdentityCard({ currentUser, petStats }: { currentUser: FamilyUser; petStats?: PetStats }) {
   const roleCopy = {
     dad: {
-      subtitle: "家里机动队队长，自己建的任务自己修，顺手还能给小柚子发小红花。",
+      subtitle: "家里机动队队长，自己建的任务自己修，顺手还能给小柚子发彩虹花。",
       title: "爸爸",
       variant: dadUserId
     },
@@ -2276,7 +2941,7 @@ function IdentityCard({ currentUser, petStats }: { currentUser: FamilyUser; petS
       variant: momUserId
     },
     child: {
-      subtitle: "小红花收集官，完成任务后等爸爸妈妈盖章发奖。",
+      subtitle: "彩虹花收集官，完成任务后等爸爸妈妈盖章发奖。",
       title: "小柚子",
       variant: childUserId
     }
@@ -2289,14 +2954,14 @@ function IdentityCard({ currentUser, petStats }: { currentUser: FamilyUser; petS
           <RoleAvatar role={currentUser.role} />
           <div className="min-w-0 flex-1">
             <h2 className="identity-title">小柚子</h2>
-            <p className="identity-subtitle">小红花 {petStats.flowers} 朵，精灵等级 {petStats.level}</p>
+            <p className="identity-subtitle">彩虹花 {petStats.flowers} 朵，精灵等级 {petStats.level}</p>
           </div>
         </div>
 
         <div className="relative z-[1] mt-4 grid grid-cols-2 gap-2.5">
           <div className="identity-stat">
             <strong>{petStats.flowers}</strong>
-            <span>拥有的小红花</span>
+            <span>拥有的彩虹花</span>
           </div>
           <div className="identity-stat">
             <strong>{petStats.level}</strong>
@@ -2321,7 +2986,7 @@ function IdentityCard({ currentUser, petStats }: { currentUser: FamilyUser; petS
         <div className="relative z-[1] mt-4 grid grid-cols-2 gap-2.5">
           <div className="identity-stat">
             <strong>{petStats.flowers}</strong>
-            <span>拥有的小红花</span>
+            <span>拥有的彩虹花</span>
           </div>
           <div className="identity-stat">
             <strong>{petStats.level}</strong>
@@ -2357,7 +3022,7 @@ function FlowerNoticeButton({
         </span>
         <span className="min-w-0">
           <span className="block truncate text-[15px] font-extrabold text-[var(--text)]">
-            {event ? `${event.giverName}送你 ${event.stars} 朵小红花` : "小红花通知"}
+            {event ? `${event.giverName}送你 ${event.stars} 朵彩虹花` : "彩虹花通知"}
           </span>
           <span className="mt-0.5 block truncate text-[13px] font-semibold text-[var(--muted)]">
             {event ? `因为：${event.reason}` : `现在有 ${flowerCount} 朵，收到奖励会记在这里`}
@@ -2471,7 +3136,7 @@ function SettingsPanel({
               />
               <SettingToggle
                 checked={reminderSettings.rewardRemindersEnabled}
-                description="小柚子完成任务后，提醒爸爸妈妈确认完成；有奖励时同时发小红花。"
+                description="小柚子完成任务后，提醒爸爸妈妈确认完成；有奖励时同时发彩虹花。"
                 disabled={!reminderSettings.siteRemindersEnabled}
                 label="小柚子待确认提醒"
                 onChange={(checked) => updateReminderSetting(rewardRemindersEnabledKey, checked)}
@@ -2956,9 +3621,37 @@ function TrashPanel({
   currentUser: FamilyUser;
   tasks: Task[];
   onBack: () => void;
-  onClear: () => void;
+  onClear: (taskIds?: string[]) => void;
   onRestore: (id: string) => void;
 }) {
+  const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(() => new Set());
+  const selectedCount = selectedTaskIds.size;
+  const allSelected = tasks.length > 0 && selectedCount === tasks.length;
+
+  useEffect(() => {
+    setSelectedTaskIds((current) => {
+      const visibleTaskIds = new Set(tasks.map((task) => task.id));
+      const next = new Set(Array.from(current).filter((taskId) => visibleTaskIds.has(taskId)));
+      return next.size === current.size ? current : next;
+    });
+  }, [tasks]);
+
+  function toggleTaskSelection(taskId: string) {
+    setSelectedTaskIds((current) => {
+      const next = new Set(current);
+      if (next.has(taskId)) {
+        next.delete(taskId);
+      } else {
+        next.add(taskId);
+      }
+      return next;
+    });
+  }
+
+  function toggleAllTasks() {
+    setSelectedTaskIds(allSelected ? new Set() : new Set(tasks.map((task) => task.id)));
+  }
+
   return (
     <section className="px-4 pt-[18px]">
       <div className="mb-[18px] flex items-center gap-3">
@@ -2978,7 +3671,7 @@ function TrashPanel({
           <button
             className="min-h-10 rounded-xl border border-[#f5c6bd] bg-[#fde7e2] px-3 text-[14px] font-bold text-[#9f332b] disabled:opacity-40"
             disabled={!tasks.length}
-            onClick={onClear}
+            onClick={() => onClear()}
             type="button"
           >
             清空
@@ -2988,9 +3681,51 @@ function TrashPanel({
 
       {tasks.length ? (
         <div className="grid gap-[11px]">
+          <div className="flex items-center justify-between gap-2 rounded-[14px] border border-[var(--border)] bg-[rgba(255,253,248,0.72)] px-3 py-2">
+            <button
+              aria-pressed={allSelected}
+              className="inline-flex min-h-9 items-center gap-2 rounded-xl px-1 text-[13px] font-extrabold text-[var(--text)]"
+              onClick={toggleAllTasks}
+              type="button"
+            >
+              <span
+                className={[
+                  "grid h-5 w-5 place-items-center rounded-[6px] border text-white",
+                  allSelected ? "border-[var(--primary)] bg-[var(--primary)]" : "border-[var(--border)] bg-[#fffaf1]"
+                ].join(" ")}
+              >
+                {allSelected ? <Check size={14} strokeWidth={3} /> : null}
+              </span>
+              全选
+            </button>
+            <button
+              className="min-h-9 rounded-xl border border-[#f5c6bd] bg-[#fde7e2] px-3 text-[13px] font-bold text-[#9f332b] disabled:opacity-40"
+              disabled={!selectedCount}
+              onClick={() => onClear(Array.from(selectedTaskIds))}
+              type="button"
+            >
+              清空已选{selectedCount ? ` ${selectedCount}` : ""}
+            </button>
+          </div>
           {tasks.map((task) => (
             <article className="task-card" key={task.id}>
-              <h3 className="mb-1.5 text-[16px] font-bold leading-snug">{task.title}</h3>
+              <div className="mb-1.5 flex items-start gap-2">
+                <button
+                  aria-label={`${selectedTaskIds.has(task.id) ? "取消选择" : "选择"}${task.title}`}
+                  aria-pressed={selectedTaskIds.has(task.id)}
+                  className={[
+                    "mt-0.5 grid h-6 w-6 flex-none place-items-center rounded-[7px] border",
+                    selectedTaskIds.has(task.id)
+                      ? "border-[var(--primary)] bg-[var(--primary)] text-white"
+                      : "border-[var(--border)] bg-[#fffaf1] text-transparent"
+                  ].join(" ")}
+                  onClick={() => toggleTaskSelection(task.id)}
+                  type="button"
+                >
+                  <Check size={15} strokeWidth={3} />
+                </button>
+                <h3 className="min-w-0 flex-1 text-[16px] font-bold leading-snug">{task.title}</h3>
+              </div>
               <p className="whitespace-pre-wrap text-[14px] leading-relaxed text-[var(--muted)]">
                 {task.note}
               </p>

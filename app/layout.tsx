@@ -4,7 +4,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "超人家族任务清单",
-  description: "家庭任务、个人待办、小柚子学习计划和小红花奖励，账号登录后按身份分开看。",
+  description: "家庭任务、个人待办、小柚子学习计划和彩虹花奖励，账号登录后按身份分开看。",
   manifest: "/manifest.webmanifest",
   appleWebApp: {
     capable: true,

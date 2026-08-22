@@ -42,13 +42,14 @@ export async function getFlowerBalance() {
   return getAvailableFlowers((await listTasks()).filter(isChildTask), store.fedFlowers);
 }
 
-export async function feedPet() {
+export async function feedPet(count = 1) {
   await refreshPetStoreFromDisk();
-  if ((await getFlowerBalance()) <= 0) {
+  const feedCount = Number.isInteger(count) && count > 0 ? count : 1;
+  if ((await getFlowerBalance()) < feedCount) {
     return { ok: false as const, status: 400, error: notEnoughFlowersError };
   }
 
-  store.fedFlowers += 1;
+  store.fedFlowers += feedCount;
   store.updatedAt = new Date().toISOString();
   await persistPetStore();
   publishServerEvent(petChangedEventType);

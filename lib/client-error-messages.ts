@@ -41,6 +41,6 @@ export function getPasswordSaveErrorMessage(error: unknown) {
 
 export function getPetFeedErrorMessage(error: unknown) {
   return error instanceof ApiRequestError && error.error === notEnoughFlowersError
-    ? "小红花不够啦，先完成任务攒一点。"
+    ? "先完成任务获得彩虹花吧！"
     : "喂小精灵失败，请稍后再试。";
 }

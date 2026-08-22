@@ -13,6 +13,7 @@ import { tasks as seedTasks } from "@/lib/mock-data";
 import { addDays, getTodayDate, toInputDate } from "@/lib/calendar-utils";
 import { taskStoreFileName } from "@/lib/data-files";
 import { hasOwnerId, isChildTask, isTaskOwner } from "@/lib/task-helpers";
+import { shouldMoveCompletedTaskToTrash } from "@/lib/task-retention";
 import { formatDateLabel, formatDateTimeLabel, normalizeTaskTiming } from "@/lib/task-time-label";
 import { tasksChangedEventType } from "@/lib/server-event-types";
 import { publishServerEvent } from "@/lib/server-events";
@@ -62,21 +63,25 @@ globalTaskStore.__superFamilyTaskStoreMtime = loadedTaskStoreMtime;
 
 export async function listTasks() {
   await refreshTaskStoreFromDisk();
+  await archiveExpiredCompletedTasks();
   return store.tasks;
 }
 
 export async function listVisibleTasks(currentUserId: string) {
   await refreshTaskStoreFromDisk();
+  await archiveExpiredCompletedTasks();
   return store.tasks.filter((task) => canViewTask(task, currentUserId));
 }
 
 export async function listTrashTasks() {
   await refreshTaskStoreFromDisk();
+  await archiveExpiredCompletedTasks();
   return store.trashTasks;
 }
 
 export async function listVisibleTrashTasks(currentUserId: string) {
   await refreshTaskStoreFromDisk();
+  await archiveExpiredCompletedTasks();
   return store.trashTasks.filter((task) => canManageTask(task, currentUserId));
 }
 
@@ -176,10 +181,18 @@ export async function restoreTask(taskId: string, currentUserId = momUserId): Pr
   return { ok: true, task };
 }
 
-export async function clearTrash(currentUserId = momUserId) {
+export async function clearTrash(currentUserId = momUserId, taskIds?: string[]) {
   await refreshTaskStoreFromDisk();
   const currentUser = findUser(currentUserId);
   if (!currentUser) return { ok: false as const, status: 401, error: userNotFoundError };
+
+  if (taskIds) {
+    const selectedTaskIds = new Set(taskIds);
+    store.trashTasks = store.trashTasks.filter((task) => !selectedTaskIds.has(task.id) || !canManageTask(task, currentUserId));
+    await persistTaskStore();
+    publishServerEvent(tasksChangedEventType);
+    return { ok: true as const };
+  }
 
   store.trashTasks =
     currentUser.role === momUserId
@@ -320,6 +333,21 @@ function isSameEditableSeriesTask(task: Task, sourceTaskId: string, seriesId: st
   if (!sourceDate) return true;
   const taskDate = task.taskDate ?? task.dueDate;
   return !taskDate || taskDate >= sourceDate;
+}
+
+async function archiveExpiredCompletedTasks() {
+  const expiredTasks = store.tasks.filter(shouldMoveCompletedTaskToTrash);
+  if (!expiredTasks.length) return;
+
+  const expiredTaskIds = new Set(expiredTasks.map((task) => task.id));
+  const existingTrashTaskIds = new Set(store.trashTasks.map((task) => task.id));
+  store.tasks = store.tasks.filter((task) => !expiredTaskIds.has(task.id));
+  store.trashTasks = [
+    ...expiredTasks.filter((task) => !existingTrashTaskIds.has(task.id)),
+    ...store.trashTasks
+  ];
+  await persistTaskStore();
+  publishServerEvent(tasksChangedEventType);
 }
 
 async function persistTaskStore() {
