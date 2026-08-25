@@ -2059,20 +2059,28 @@ function shouldShowTaskInChildTimeline(task: Pick<Task, "dueDate" | "status" | "
 }
 
 function getHomeGroupKey(task: Pick<Task, "dueDate" | "status" | "taskDate" | "timeBucket">): HomeGroupKey {
-  const timeBucket = getTaskTimeBucket(task);
-  if (
-    timeBucket === overdueTimeBucket ||
-    timeBucket === todayTimeBucket ||
-    timeBucket === tomorrowTimeBucket ||
-    timeBucket === dayAfterTimeBucket
-  ) {
-    return timeBucket;
+  const today = getTodayDate();
+  const startDate = parseDateOnly(task.taskDate);
+  const dueDate = parseDateOnly(task.dueDate);
+
+  if (task.status !== doneStatus && dueDate && dueDate.getTime() < today.getTime()) {
+    return overdueTimeBucket;
   }
 
-  const taskDate = parseDateOnly(task.dueDate || task.taskDate);
+  const taskDate =
+    startDate && startDate.getTime() >= today.getTime()
+      ? startDate
+      : dueDate && dueDate.getTime() >= today.getTime()
+        ? dueDate
+        : startDate ?? dueDate;
+
   if (!taskDate) return afterMonthHomeGroup;
 
-  const today = getTodayDate();
+  const dayDiff = Math.round((taskDate.getTime() - today.getTime()) / 86400000);
+  if (dayDiff <= 0) return todayTimeBucket;
+  if (dayDiff === 1) return tomorrowTimeBucket;
+  if (dayDiff === 2) return dayAfterTimeBucket;
+
   const isSameMonth =
     taskDate.getFullYear() === today.getFullYear() &&
     taskDate.getMonth() === today.getMonth();
