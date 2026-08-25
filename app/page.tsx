@@ -2055,7 +2055,12 @@ function getTasksForHomeGroup(tasks: Task[], groupKey: HomeGroupKey) {
 
 function shouldShowTaskInChildTimeline(task: Pick<Task, "dueDate" | "status" | "taskDate" | "timeBucket">) {
   if (task.status !== doneStatus) return true;
-  return getHomeGroupKey(task) === todayTimeBucket;
+
+  const today = getTodayDate();
+  const taskDate = parseDateOnly(task.taskDate || task.dueDate);
+  if (!taskDate) return false;
+
+  return taskDate.getTime() >= today.getTime();
 }
 
 function getHomeGroupKey(task: Pick<Task, "dueDate" | "status" | "taskDate" | "timeBucket">): HomeGroupKey {
