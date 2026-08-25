@@ -7,6 +7,7 @@ import { maxCommentLength } from "@/lib/task-limits";
 import { taskCategoryLabels, taskPriorityLabels } from "@/lib/task-labels";
 import { doneStatus, normalPriority, pendingRewardStatus, urgentPriority } from "@/lib/task-values";
 import { getTaskOwnerNames } from "@/lib/task-helpers";
+import { getEffectiveRewardStars, isRewardReducedForOverdueLearningTask } from "@/lib/task-rewards";
 import {
   formatDateTimeLabel,
   getCommentTimeLabel,
@@ -47,6 +48,8 @@ export function TaskDetailSheet({
   const timeRangeLabel = getTaskTimeRangeLabel(task);
   const canManageTask = currentUser.role === momUserId || task.createdById === currentUser.id;
   const canConfirmReward = currentUser.role === momUserId || currentUser.role === dadUserId;
+  const effectiveRewardStars = getEffectiveRewardStars(task);
+  const rewardIsReduced = isRewardReducedForOverdueLearningTask(task);
   const [commentText, setCommentText] = useState("");
   const detailTitleId = useId();
 
@@ -85,13 +88,17 @@ export function TaskDetailSheet({
               </span>
             ) : null}
             {!compactForChild ? <span className="chip">负责人：{ownerNames}</span> : null}
-            <span className="chip">完成时间：{timeRangeLabel}</span>
+            <span className="chip">任务时间：{timeRangeLabel}</span>
             {!compactForChild && task.remindLabel ? <span className="chip">提醒：{task.remindLabel}</span> : null}
             {!compactForChild && task.repeatLabel ? <span className="chip">{getRepeatDisplayLabel(task.repeatLabel, task.repeatUntil)}</span> : null}
             {(isDone || isPending) && task.completedBy ? (
               <span className="chip">完成：{task.completedBy.name} · {formatDateTimeLabel(task.completedAt)}</span>
             ) : null}
-            {task.rewardStars ? <span className="chip chip-warm">奖励 {task.rewardStars} 朵</span> : null}
+            {task.rewardStars ? (
+              <span className="chip chip-warm">
+                {rewardIsReduced ? `逾期奖励 ${effectiveRewardStars} 朵（原 ${task.rewardStars}）` : `奖励 ${task.rewardStars} 朵`}
+              </span>
+            ) : null}
           </div>
         </div>
 
@@ -162,8 +169,8 @@ export function TaskDetailSheet({
             {isDone
               ? "恢复未完成"
               : isPending && canConfirmReward
-                ? task.rewardStars
-                  ? `确认并发 ${task.rewardStars} 朵`
+                ? effectiveRewardStars
+                  ? `确认并发 ${effectiveRewardStars} 朵`
                   : "确认完成"
                 : isPending
                   ? "恢复未完成"

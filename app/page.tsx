@@ -102,6 +102,7 @@ import {
 import { getTaskOwnerNames, isChildTask, isTaskOwner } from "@/lib/task-helpers";
 import { sortTasksByDate } from "@/lib/task-listing";
 import { shouldKeepTaskInTimeline } from "@/lib/task-retention";
+import { getEffectiveRewardStars, isRewardReducedForOverdueLearningTask } from "@/lib/task-rewards";
 import {
   formatDateLabel,
   formatDateTimeLabel,
@@ -652,8 +653,15 @@ export default function HomePage() {
       });
       replaceTask(data.task);
       setRewardConfirmTaskId(null);
+      const originalRewardStars = task.rewardStars ?? 0;
+      const actualRewardStars = data.task.rewardStars ?? 0;
+      const rewardWasReduced = actualRewardStars > 0 && actualRewardStars < originalRewardStars;
       showNotice(
-        task.rewardStars ? `已给小柚子 ${task.rewardStars} 朵彩虹花。` : "任务已确认完成。",
+        actualRewardStars
+          ? rewardWasReduced
+            ? `逾期补完，已减半给小柚子 ${actualRewardStars} 朵彩虹花。`
+            : `已给小柚子 ${actualRewardStars} 朵彩虹花。`
+          : "任务已确认完成。",
         "success"
       );
       void loadServerState();
@@ -1565,7 +1573,9 @@ function RewardConfirmSheet({
   task: Task;
 }) {
   const titleId = useId();
-  const rewardCount = task.rewardStars ?? 0;
+  const rewardCount = getEffectiveRewardStars(task);
+  const originalRewardCount = task.rewardStars ?? 0;
+  const rewardIsReduced = isRewardReducedForOverdueLearningTask(task);
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-[rgba(36,48,47,0.24)] px-5 backdrop-blur-sm">
@@ -1581,7 +1591,9 @@ function RewardConfirmSheet({
         <h2 className="text-[19px] font-extrabold leading-tight" id={titleId}>确认完成奖励</h2>
         <p className="mt-2 text-[14px] leading-relaxed text-[var(--muted)]">
           {rewardCount > 0
-            ? `确认「${task.title}」后，会给小柚子 ${rewardCount} 朵彩虹花。`
+            ? rewardIsReduced
+              ? `「${task.title}」已逾期，补完后奖励减半，会给小柚子 ${rewardCount} 朵彩虹花（原 ${originalRewardCount} 朵）。`
+              : `确认「${task.title}」后，会给小柚子 ${rewardCount} 朵彩虹花。`
             : `确认「${task.title}」后，任务会标记为已完成。`}
         </p>
         <div className="mt-4 grid grid-cols-2 gap-2.5">
@@ -1910,7 +1922,7 @@ function QuickCreateSheet({
                 {taskPriorityLabels[draft.priority]}
               </span>
               {!isChildUser ? <span className="chip">负责人：{ownerNames}</span> : null}
-              <span className="chip">完成时间：{getDraftTimeRangeLabel(draft)}</span>
+              <span className="chip">任务时间：{getDraftTimeRangeLabel(draft)}</span>
               {!isChildUser && draft.repeatLabel ? <span className="chip">{draft.repeatLabel}</span> : null}
               {draft.rewardStars ? <span className="chip chip-warm">奖励 {draft.rewardStars} 朵</span> : null}
             </div>
@@ -2039,6 +2051,11 @@ function HomePanel({
 
 function getTasksForHomeGroup(tasks: Task[], groupKey: HomeGroupKey) {
   return sortTasksByDate(tasks.filter((task) => getHomeGroupKey(task) === groupKey));
+}
+
+function shouldShowTaskInChildTimeline(task: Pick<Task, "dueDate" | "status" | "taskDate" | "timeBucket">) {
+  if (task.status !== doneStatus) return true;
+  return getHomeGroupKey(task) === todayTimeBucket;
 }
 
 function getHomeGroupKey(task: Pick<Task, "dueDate" | "status" | "taskDate" | "timeBucket">): HomeGroupKey {
@@ -2460,7 +2477,14 @@ function BabyPanel({
   onOpen: (id: string) => void;
   onToggle: (id: string) => void;
 }) {
-  const sortedTasks = sortTasksByDate(tasks);
+  const availableTasks = tasks.filter(shouldShowTaskInChildTimeline);
+  const groupedTasks = homeGroups
+    .map((group) => ({
+      ...group,
+      tasks: getTasksForHomeGroup(availableTasks, group.key)
+    }))
+    .filter((group) => group.tasks.length > 0);
+  const taskCount = groupedTasks.reduce((total, group) => total + group.tasks.length, 0);
   const petCardRef = useRef<HTMLDivElement | null>(null);
   const petSpriteRef = useRef<HTMLDivElement | null>(null);
   const feedButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -2632,26 +2656,33 @@ function BabyPanel({
         </button>
       </div>
 
-      <SectionHeader title="小柚子全部任务" count={sortedTasks.length} />
-      {sortedTasks.length ? (
-        <div className="grid gap-[11px]">
-          {sortedTasks.map((task) => (
-            <TaskCard
-              compactForChild={currentUser.role === childUserId}
-              currentUser={currentUser}
-              isActionPending={pendingTaskIds.has(task.id)}
-              key={task.id}
-              task={task}
-              onConfirmReward={onConfirmReward}
-              onOpen={onOpen}
-              onToggle={onToggle}
-            />
+      <SectionHeader title="小柚子任务时间轴" count={taskCount} />
+      {groupedTasks.length ? (
+        <div className="grid gap-[18px]">
+          {groupedTasks.map((group) => (
+            <section key={group.key}>
+              <SectionHeader title={group.title} count={group.tasks.length} />
+              <div className="grid gap-[11px]">
+                {group.tasks.map((task) => (
+                  <TaskCard
+                    compactForChild
+                    currentUser={currentUser}
+                    isActionPending={pendingTaskIds.has(task.id)}
+                    key={task.id}
+                    task={task}
+                    onConfirmReward={onConfirmReward}
+                    onOpen={onOpen}
+                    onToggle={onToggle}
+                  />
+                ))}
+              </div>
+            </section>
           ))}
         </div>
       ) : (
         <EmptyState
           title="小柚子现在没有任务"
-          description="爸爸妈妈新增学习计划后，会放在这里一起看。"
+          description="爸爸妈妈新增学习计划后，会按今天、明天、本周这些时间段放在这里。"
         />
       )}
     </section>
@@ -3731,7 +3762,7 @@ function TrashPanel({
               </p>
               <div className="mt-3 flex flex-wrap gap-1.5">
                 <span className="chip">负责人：{getTaskOwnerNames(task)}</span>
-                <span className="chip">完成时间：{getTaskTimeRangeLabel(task)}</span>
+                <span className="chip">任务时间：{getTaskTimeRangeLabel(task)}</span>
               </div>
               <button
                 className="mt-3 h-11 w-full rounded-xl border border-[var(--primary)] bg-[var(--primary-soft)] font-bold text-[#1e655a]"

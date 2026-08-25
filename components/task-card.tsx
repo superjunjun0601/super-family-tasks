@@ -5,6 +5,7 @@ import { dadUserId, momUserId } from "@/lib/family-users";
 import { taskPriorityLabels } from "@/lib/task-labels";
 import { doneStatus, normalPriority, pendingRewardStatus, urgentPriority } from "@/lib/task-values";
 import { getTaskOwnerNames } from "@/lib/task-helpers";
+import { getEffectiveRewardStars, isRewardReducedForOverdueLearningTask } from "@/lib/task-rewards";
 import {
   formatDateTimeLabel,
   getCommentTimeLabel,
@@ -41,6 +42,8 @@ export function TaskCard({
   const showChildDetails = compactForChild;
   const timeRangeLabel = getTaskTimeRangeLabel(task);
   const visibleComments = task.comments ?? [];
+  const effectiveRewardStars = getEffectiveRewardStars(task);
+  const rewardIsReduced = isRewardReducedForOverdueLearningTask(task);
 
   return (
     <article
@@ -106,7 +109,7 @@ export function TaskCard({
       </div>
 
       <div className="mt-3 flex flex-wrap gap-1.5">
-        {isDone ? <span className="chip chip-primary">已完成</span> : null}
+        {isDone && !showChildDetails ? <span className="chip chip-primary">已完成</span> : null}
         {isOverdue ? <span className="chip chip-danger">逾期</span> : null}
         {isPending ? <span className="chip chip-magic">等待确认</span> : null}
         {!showChildDetails || task.priority !== normalPriority ? (
@@ -115,13 +118,15 @@ export function TaskCard({
           </span>
         ) : null}
         {!showChildDetails ? <span className="chip">负责人：{ownerNames}</span> : null}
-        <span className="chip">完成时间：{timeRangeLabel}</span>
+        <span className="chip">任务时间：{timeRangeLabel}</span>
         {!showChildDetails && task.repeatLabel ? <span className="chip">{getRepeatDisplayLabel(task.repeatLabel, task.repeatUntil)}</span> : null}
         {!showChildDetails && (isDone || isPending) && task.completedBy ? (
           <span className="chip">完成：{task.completedBy.name} · {formatDateTimeLabel(task.completedAt)}</span>
         ) : null}
         {task.rewardStars ? (
-          <span className="chip chip-warm">奖励 {task.rewardStars} 朵</span>
+          <span className="chip chip-warm">
+            {rewardIsReduced ? `逾期奖励 ${effectiveRewardStars} 朵（原 ${task.rewardStars}）` : `奖励 ${task.rewardStars} 朵`}
+          </span>
         ) : null}
       </div>
 
@@ -161,7 +166,11 @@ export function TaskCard({
             <div className="min-w-0 flex-1">
               <p className="text-[14px] font-bold text-[#5d42ae]">小柚子已完成，等待爸爸/妈妈确认</p>
               <p className="mt-0.5 text-[13px] leading-relaxed text-[var(--muted)]">
-                {task.rewardStars ? `确认后发放 ${task.rewardStars} 朵彩虹花。` : "确认后任务会正式完成。"}
+                {effectiveRewardStars
+                  ? rewardIsReduced
+                    ? `逾期补完，确认后减半发放 ${effectiveRewardStars} 朵彩虹花。`
+                    : `确认后发放 ${effectiveRewardStars} 朵彩虹花。`
+                  : "确认后任务会正式完成。"}
               </p>
             </div>
           </div>
@@ -174,7 +183,7 @@ export function TaskCard({
             }}
             type="button"
           >
-            {task.rewardStars ? `确认并发 ${task.rewardStars} 朵` : "确认完成"}
+            {effectiveRewardStars ? `确认并发 ${effectiveRewardStars} 朵` : "确认完成"}
           </button>
         </div>
       ) : null}

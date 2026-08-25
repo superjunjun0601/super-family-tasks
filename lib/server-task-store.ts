@@ -14,6 +14,7 @@ import { addDays, getTodayDate, toInputDate } from "@/lib/calendar-utils";
 import { taskStoreFileName } from "@/lib/data-files";
 import { hasOwnerId, isChildTask, isTaskOwner } from "@/lib/task-helpers";
 import { shouldMoveCompletedTaskToTrash } from "@/lib/task-retention";
+import { getEffectiveRewardStars } from "@/lib/task-rewards";
 import { formatDateLabel, formatDateTimeLabel, normalizeTaskTiming } from "@/lib/task-time-label";
 import { tasksChangedEventType } from "@/lib/server-event-types";
 import { publishServerEvent } from "@/lib/server-events";
@@ -258,16 +259,19 @@ export async function confirmReward(taskId: string, currentUserId = momUserId): 
   }
 
   const rewardedAt = new Date().toISOString();
+  const originalRewardStars = task.rewardStars;
+  const effectiveRewardStars = getEffectiveRewardStars(task);
   const nextTask = normalizeTaskTiming({
     ...task,
     completedAt: task.completedAt ?? rewardedAt,
+    rewardStars: effectiveRewardStars || undefined,
     rewardedAt,
     rewardedBy: currentUser,
     repeatSeriesId: task.repeatWeekdays?.length ? task.repeatSeriesId ?? task.id : undefined,
     status: doneStatus
   });
   store.tasks = store.tasks.map((item) => (item.id === taskId ? nextTask : item));
-  createNextRepeatTask(nextTask);
+  createNextRepeatTask({ ...nextTask, rewardStars: originalRewardStars });
   await persistTaskStore();
   publishServerEvent(tasksChangedEventType);
   return { ok: true, task: nextTask };

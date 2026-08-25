@@ -1,6 +1,8 @@
 .DS_Store
 node_modules
 .next
+.next-dev
+.next-broken-*
 .next-doctor-build
 .next-doctor-build-*
 .next-smoke
