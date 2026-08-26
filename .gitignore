@@ -17,4 +17,6 @@ coverage
 tsconfig.tsbuildinfo
 data/*
 !data/.gitignore
+data-demo/*
+!data-demo/.gitignore
 .vercel

@@ -20,6 +20,7 @@
     "data:restore": "node scripts/restore-data.mjs restore",
     "data:restore-latest": "node scripts/restore-data.mjs latest",
     "data:restore-manual": "node scripts/restore-manual-backup.mjs",
+    "demo:seed": "node scripts/seed-demo-data.mjs",
     "auth:secret": "node scripts/generate-auth-secret.mjs",
     "user:reset-password": "node scripts/reset-password.mjs",
     "prisma:push": "prisma db push",

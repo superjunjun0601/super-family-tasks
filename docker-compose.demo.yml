@@ -1,0 +1,14 @@
+services:
+  app:
+    build:
+      context: .
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      AUTH_COOKIE_SECURE: "false"
+      AUTH_SECRET: super-family-tasks-demo-secret-change-later
+      SUPER_FAMILY_DATA_DIR: /app/data-demo
+    volumes:
+      - ./data-demo:/app/data-demo
+    ports:
+      - "3036:3035"
