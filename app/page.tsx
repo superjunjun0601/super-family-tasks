@@ -115,6 +115,8 @@ import { singleTaskUpdateScope, type TaskUpdateScope } from "@/lib/task-update-s
 import { parseQuickTask } from "@/lib/quick-task-parser";
 import type { FamilyUser, ReminderSettings, Task, TaskDraft, TaskStatus, TaskTimeBucket } from "@/lib/types";
 
+const isPortfolioDemo = process.env.NEXT_PUBLIC_PORTFOLIO_DEMO === "true";
+
 type PetStoreState = {
   fedFlowers: number;
   updatedAt?: string;
@@ -1473,7 +1475,7 @@ function LoginScreen({
           {isSubmitting ? "登录中..." : "登录"}
         </button>
         <p className="login-hint">
-          选择身份后输入对应密码。
+          选择身份后输入对应密码。{isPortfolioDemo ? "默认密码是：123456" : ""}
         </p>
       </form>
     </main>

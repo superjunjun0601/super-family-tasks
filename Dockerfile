@@ -7,6 +7,8 @@ COPY prisma ./prisma
 RUN npm ci
 
 COPY . .
+ARG NEXT_PUBLIC_PORTFOLIO_DEMO=false
+ENV NEXT_PUBLIC_PORTFOLIO_DEMO=${NEXT_PUBLIC_PORTFOLIO_DEMO}
 RUN npx prisma generate
 RUN npm run build
 

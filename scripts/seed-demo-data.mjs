@@ -8,7 +8,7 @@ import { defaultReminderSettings } from "./reminder-settings.mjs";
 
 const rootDir = process.cwd();
 const dataDir = getDataDir(rootDir);
-const demoPassword = process.env.SUPER_FAMILY_DEMO_PASSWORD?.trim() || "1234";
+const demoPassword = process.env.SUPER_FAMILY_DEMO_PASSWORD?.trim() || "123456";
 const now = new Date();
 const nowIso = now.toISOString();
 
