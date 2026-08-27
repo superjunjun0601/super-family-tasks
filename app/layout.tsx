@@ -14,9 +14,10 @@ export const metadata: Metadata = {
   applicationName: "超人家族任务清单",
   icons: {
     icon: [
-      { url: "/icon.svg", type: "image/svg+xml" },
+      { url: "/login-logo.png", sizes: "866x866", type: "image/png" },
       { url: "/icon-192.png", sizes: "192x192", type: "image/png" },
-      { url: "/icon-512.png", sizes: "512x512", type: "image/png" }
+      { url: "/icon-512.png", sizes: "512x512", type: "image/png" },
+      { url: "/icon.svg", type: "image/svg+xml" }
     ],
     apple: "/icon-192.png"
   }
