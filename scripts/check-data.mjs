@@ -260,10 +260,21 @@ function checkPetStore(value) {
   if (!Number.isInteger(value.fedFlowers) || value.fedFlowers < 0) {
     problems.push(`${petStoreFileName} fedFlowers 异常`);
   } else if (taskStore) {
-    const maxFedFlowers = getMaxFedFlowers(taskStore);
+    const maxFedFlowers = getMaxFedFlowers(taskStore, value);
     if (value.fedFlowers > maxFedFlowers) {
       problems.push(`${petStoreFileName} 已喂养小红花 ${value.fedFlowers} 朵，超过当前可获得上限 ${maxFedFlowers} 朵`);
     }
+  }
+
+  if (!Number.isInteger(value.archivedRewardFlowers ?? 0) || (value.archivedRewardFlowers ?? 0) < 0) {
+    problems.push(`${petStoreFileName} archivedRewardFlowers 异常`);
+  }
+  if (
+    value.archivedRewardTaskIds !== undefined &&
+    (!Array.isArray(value.archivedRewardTaskIds) ||
+      value.archivedRewardTaskIds.some((taskId) => typeof taskId !== "string"))
+  ) {
+    problems.push(`${petStoreFileName} archivedRewardTaskIds 异常`);
   }
 
   if (value.updatedAt !== undefined && typeof value.updatedAt !== "string") {
@@ -271,8 +282,18 @@ function checkPetStore(value) {
   }
 }
 
-function getMaxFedFlowers(value) {
-  const tasks = Array.isArray(value?.tasks) ? value.tasks : [];
+function getMaxFedFlowers(value, petStoreValue = {}) {
+  const archivedTaskIds = new Set(
+    Array.isArray(petStoreValue?.archivedRewardTaskIds) ? petStoreValue.archivedRewardTaskIds : []
+  );
+  const archivedRewardFlowers =
+    Number.isInteger(petStoreValue?.archivedRewardFlowers) && petStoreValue.archivedRewardFlowers >= 0
+      ? petStoreValue.archivedRewardFlowers
+      : 0;
+  const tasks = [
+    ...(Array.isArray(value?.tasks) ? value.tasks : []),
+    ...(Array.isArray(value?.trashTasks) ? value.trashTasks : [])
+  ].filter((task) => !archivedTaskIds.has(task?.id));
   const earnedFlowers = tasks.reduce((total, task) => {
     if (!task || typeof task !== "object") return total;
     const ownerIds = Array.isArray(task.owners) ? task.owners.map((owner) => owner?.id) : [];
@@ -280,7 +301,7 @@ function getMaxFedFlowers(value) {
     if (!isChildTask || task.status !== doneStatus) return total;
     return total + (Number.isInteger(task.rewardStars) && task.rewardStars > 0 ? task.rewardStars : 0);
   }, 0);
-  return petBaseFlowers + earnedFlowers;
+  return petBaseFlowers + archivedRewardFlowers + earnedFlowers;
 }
 
 function isDefaultPasswordHash(passwordHash) {
@@ -337,6 +358,9 @@ function printSummary() {
   const taskCount = Array.isArray(taskStore?.tasks) ? taskStore.tasks.length : 0;
   const trashCount = Array.isArray(taskStore?.trashTasks) ? taskStore.trashTasks.length : 0;
   const fedFlowers = Number.isInteger(petStore?.fedFlowers) ? petStore.fedFlowers : 0;
+  const archivedRewardFlowers = Number.isInteger(petStore?.archivedRewardFlowers)
+    ? petStore.archivedRewardFlowers
+    : 0;
   const snapshotCount = existsSync(BACKUP_DIR) ? readdirSync(BACKUP_DIR).length : 0;
   const manualBackupCount = getManualBackupStatus().count;
 
@@ -344,6 +368,7 @@ function printSummary() {
   console.log(`- 任务：${taskCount}`);
   console.log(`- 回收站：${trashCount}`);
   console.log(`- 小精灵已喂养：${fedFlowers} 朵`);
+  console.log(`- 已归档彩虹花奖励：${archivedRewardFlowers} 朵`);
   console.log(`- 自动快照：${snapshotCount}`);
   console.log(`- 手动备份：${manualBackupCount}`);
   console.log(`- task-store 更新时间：${formatMtime(taskStoreFileName)}`);

@@ -119,6 +119,7 @@ const isPortfolioDemo = process.env.NEXT_PUBLIC_PORTFOLIO_DEMO === "true";
 
 type PetStoreState = {
   fedFlowers: number;
+  flowerBalance?: number;
   updatedAt?: string;
 };
 
@@ -297,7 +298,7 @@ export default function HomePage() {
   const [rewardConfirmTaskId, setRewardConfirmTaskId] = useState<string | null>(null);
   const [isFeedPetConfirmOpen, setIsFeedPetConfirmOpen] = useState(false);
   const [isFlowerHistoryOpen, setIsFlowerHistoryOpen] = useState(false);
-  const [petState, setPetState] = useState<PetStoreState>({ fedFlowers: 0 });
+  const [petState, setPetState] = useState<PetStoreState>({ fedFlowers: 0, flowerBalance: 0 });
   const [isFeedingPet, setIsFeedingPet] = useState(false);
   const [petActivity, setPetActivity] = useState<PetActivity | null>(null);
   const [upgradeResult, setUpgradeResult] = useState<UpgradeResult | null>(null);
@@ -372,7 +373,10 @@ export default function HomePage() {
     reminderSettings.siteRemindersEnabled && reminderSettings.rewardRemindersEnabled ? pendingRewardTasks : [];
   const reminderCount =
     visibleOverdueReminderTasks.length + visibleDueSoonReminderTasks.length + visiblePendingRewardTasks.length;
-  const petStats = useMemo(() => getPetStats(childTasks, petState.fedFlowers), [childTasks, petState.fedFlowers]);
+  const petStats = useMemo(
+    () => getPetStats(childTasks, petState.fedFlowers, petState.flowerBalance),
+    [childTasks, petState.fedFlowers, petState.flowerBalance]
+  );
   const flowerRewardEvents = useMemo(() => getFlowerRewardEvents(childTasks), [childTasks]);
   const selectedTask = tasks.find((task) => task.id === selectedTaskId);
   const editingTask = tasks.find((task) => task.id === editingTaskId);
@@ -414,7 +418,7 @@ export default function HomePage() {
     setRewardConfirmTaskId(null);
     setIsFeedPetConfirmOpen(false);
     setIsFlowerHistoryOpen(false);
-    setPetState({ fedFlowers: 0 });
+    setPetState({ fedFlowers: 0, flowerBalance: 0 });
     setIsFeedingPet(false);
     setPetActivity(null);
     setUpgradeResult(null);
@@ -458,16 +462,18 @@ export default function HomePage() {
     }
 
     try {
-      const petData = await apiRequest<{ pet: PetStoreState }>(petApiPath);
+      const petData = await apiRequest<{ pet: PetStoreState; flowerBalance: number }>(petApiPath);
       if (!isMountedRef.current) return;
-      setPetState(petData.pet);
-      if (loadedTasks) writeLocalPetSnapshot(loadedTasks, petData.pet);
+      const nextPetState = { ...petData.pet, flowerBalance: petData.flowerBalance };
+      setPetState(nextPetState);
+      if (loadedTasks) writeLocalPetSnapshot(loadedTasks, nextPetState);
     } catch (error) {
       if (isUnauthorizedError(error)) handleSessionExpired();
       const localSnapshot = readLocalPetSnapshot();
       if (localSnapshot && isMountedRef.current) {
         setPetState({
           fedFlowers: localSnapshot.happiness,
+          flowerBalance: localSnapshot.flowers,
           updatedAt: localSnapshot.updatedAt
         });
       }
@@ -523,6 +529,7 @@ export default function HomePage() {
     if (localSnapshot) {
       setPetState({
         fedFlowers: localSnapshot.happiness,
+        flowerBalance: localSnapshot.flowers,
         updatedAt: localSnapshot.updatedAt
       });
     }
@@ -690,15 +697,20 @@ export default function HomePage() {
     const previousPetState = petState;
     const previousLevel = petStats.currentLevel.level;
     setIsFeedingPet(true);
-    setPetState((current) => ({ ...current, fedFlowers: current.fedFlowers + feedCount }));
+    setPetState((current) => ({
+      ...current,
+      fedFlowers: current.fedFlowers + feedCount,
+      flowerBalance: Math.max(0, (current.flowerBalance ?? petStats.flowers) - feedCount)
+    }));
 
     try {
-      const data = await apiRequest<{ pet: PetStoreState }>(petFeedApiPath, {
+      const data = await apiRequest<{ pet: PetStoreState; flowerBalance: number }>(petFeedApiPath, {
         body: { count: feedCount },
         method: "POST"
       });
-      setPetState(data.pet);
-      writeLocalPetSnapshot(tasks, data.pet);
+      const nextPetState = { ...data.pet, flowerBalance: data.flowerBalance };
+      setPetState(nextPetState);
+      writeLocalPetSnapshot(tasks, nextPetState);
       setIsFeedPetConfirmOpen(false);
       const nextLevel = getCurrentLevel(data.pet.fedFlowers);
       const levelUp = nextLevel.level > previousLevel;
@@ -1236,7 +1248,7 @@ function writeLocalPetSnapshot(tasks: Task[], petState: PetStoreState) {
   if (typeof window === "undefined") return;
 
   const childTasks = tasks.filter(isChildTask);
-  const stats = getPetStats(childTasks, petState.fedFlowers);
+  const stats = getPetStats(childTasks, petState.fedFlowers, petState.flowerBalance);
   const snapshot: LocalPetSnapshot = {
     completedTasks: childTasks.filter((task) => task.status === doneStatus).map((task) => task.id),
     fedFlowers: petState.fedFlowers,

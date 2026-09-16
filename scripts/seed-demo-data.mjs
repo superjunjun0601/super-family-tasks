@@ -25,6 +25,8 @@ const userStore = {
 };
 
 const petStore = {
+  archivedRewardFlowers: 0,
+  archivedRewardTaskIds: [],
   fedFlowers: 60,
   updatedAt: nowIso
 };

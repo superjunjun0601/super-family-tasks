@@ -79,7 +79,7 @@ const repairedTaskStore = repairTaskStore(taskStoreSource.value);
 const repairedUserStore = repairUserStore(userStoreSource.value);
 const repairedPetStore = petStoreSource
   ? repairPetStore(petStoreSource.value, repairedTaskStore.value)
-  : { value: { fedFlowers: 0 }, changed: false };
+  : { value: { archivedRewardFlowers: 0, archivedRewardTaskIds: [], fedFlowers: 0 }, changed: false };
 const taskChanged = taskStoreSource.source !== TASK_STORE || repairedTaskStore.changed;
 const userChanged = userStoreSource.source !== USER_STORE || repairedUserStore.changed;
 const petChanged = Boolean(petStoreSource && (petStoreSource.source !== PET_STORE || repairedPetStore.changed));
@@ -400,11 +400,21 @@ function repairReminderSettings(value) {
 function repairPetStore(value, taskStore) {
   if (!isRecord(value)) {
     report.push(`${PET_STORE} 不是对象，已重建小精灵喂养数据`);
-    return { value: { fedFlowers: 0 }, changed: true };
+    return {
+      value: { archivedRewardFlowers: 0, archivedRewardTaskIds: [], fedFlowers: 0 },
+      changed: true
+    };
   }
 
+  const archivedRewardFlowers =
+    Number.isInteger(value.archivedRewardFlowers) && value.archivedRewardFlowers >= 0
+      ? value.archivedRewardFlowers
+      : 0;
+  const archivedRewardTaskIds = Array.isArray(value.archivedRewardTaskIds)
+    ? [...new Set(value.archivedRewardTaskIds.filter((taskId) => typeof taskId === "string"))]
+    : [];
   const rawFedFlowers = Number.isInteger(value.fedFlowers) && value.fedFlowers >= 0 ? value.fedFlowers : 0;
-  const maxFedFlowers = getMaxFedFlowers(taskStore);
+  const maxFedFlowers = getMaxFedFlowers(taskStore, { archivedRewardFlowers, archivedRewardTaskIds });
   const fedFlowers = Math.min(rawFedFlowers, maxFedFlowers);
   const updatedAt = typeof value.updatedAt === "string" ? value.updatedAt : undefined;
   if (rawFedFlowers > maxFedFlowers) {
@@ -412,15 +422,31 @@ function repairPetStore(value, taskStore) {
   }
   return {
     value: {
+      archivedRewardFlowers,
+      archivedRewardTaskIds,
       fedFlowers,
       updatedAt
     },
-    changed: fedFlowers !== value.fedFlowers || updatedAt !== value.updatedAt
+    changed:
+      archivedRewardFlowers !== value.archivedRewardFlowers ||
+      JSON.stringify(archivedRewardTaskIds) !== JSON.stringify(value.archivedRewardTaskIds ?? []) ||
+      fedFlowers !== value.fedFlowers ||
+      updatedAt !== value.updatedAt
   };
 }
 
-function getMaxFedFlowers(value) {
-  const tasks = Array.isArray(value?.tasks) ? value.tasks : [];
+function getMaxFedFlowers(value, petStoreValue = {}) {
+  const archivedTaskIds = new Set(
+    Array.isArray(petStoreValue?.archivedRewardTaskIds) ? petStoreValue.archivedRewardTaskIds : []
+  );
+  const archivedRewardFlowers =
+    Number.isInteger(petStoreValue?.archivedRewardFlowers) && petStoreValue.archivedRewardFlowers >= 0
+      ? petStoreValue.archivedRewardFlowers
+      : 0;
+  const tasks = [
+    ...(Array.isArray(value?.tasks) ? value.tasks : []),
+    ...(Array.isArray(value?.trashTasks) ? value.trashTasks : [])
+  ].filter((task) => !archivedTaskIds.has(task?.id));
   const earnedFlowers = tasks.reduce((total, task) => {
     if (!isRecord(task)) return total;
     const ownerIds = Array.isArray(task.owners) ? task.owners.map((owner) => owner?.id) : [];
@@ -428,7 +454,7 @@ function getMaxFedFlowers(value) {
     if (!isChildTask || task.status !== doneStatus) return total;
     return total + (Number.isInteger(task.rewardStars) && task.rewardStars > 0 ? task.rewardStars : 0);
   }, 0);
-  return petBaseFlowers + earnedFlowers;
+  return petBaseFlowers + archivedRewardFlowers + earnedFlowers;
 }
 
 function repairOwners(value, createdById, category) {
@@ -724,6 +750,7 @@ function printSummary(taskSource, userSource, petSource, taskStore, userStore, p
   console.log(`- 回收站：${taskStore.trashTasks.length}`);
   console.log(`- 密码账号：${Object.keys(userStore.passwordHashes).length}`);
   console.log(`- 小精灵已喂养：${petStore.fedFlowers}`);
+  console.log(`- 已归档彩虹花奖励：${petStore.archivedRewardFlowers}`);
   console.log(`- 任务数据需要写入：${taskChanged ? "是" : "否"}`);
   console.log(`- 密码数据需要写入：${userChanged ? "是" : "否"}`);
   console.log(`- 小精灵数据需要写入：${petChanged ? "是" : "否"}`);

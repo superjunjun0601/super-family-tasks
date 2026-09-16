@@ -13,8 +13,13 @@ export type PetStats = {
   nextLevelLabel: string | null;
 };
 
-export function getPetStats(tasks: Task[], fedFlowers: number): PetStats {
-  const flowers = getAvailableFlowers(tasks, fedFlowers);
+export function getPetStats(tasks: Task[], fedFlowers: number, authoritativeFlowerBalance?: number): PetStats {
+  const flowers =
+    typeof authoritativeFlowerBalance === "number" &&
+    Number.isInteger(authoritativeFlowerBalance) &&
+    authoritativeFlowerBalance >= 0
+      ? authoritativeFlowerBalance
+      : getAvailableFlowers(tasks, fedFlowers);
   const happiness = Math.max(0, Math.floor(fedFlowers));
   const currentLevel = getCurrentLevel(happiness);
   const nextLevel = getNextLevel(happiness);
@@ -32,10 +37,10 @@ export function getPetStats(tasks: Task[], fedFlowers: number): PetStats {
   };
 }
 
-export function getAvailableFlowers(tasks: Task[], fedFlowers: number) {
+export function getAvailableFlowers(tasks: Task[], fedFlowers: number, archivedRewardFlowers = 0) {
   const earnedFlowers = tasks.reduce((total, task) => {
     if (task.status !== doneStatus) return total;
     return total + (task.rewardStars ?? 0);
   }, 0);
-  return Math.max(0, petBaseFlowers + earnedFlowers - fedFlowers);
+  return Math.max(0, petBaseFlowers + archivedRewardFlowers + earnedFlowers - fedFlowers);
 }

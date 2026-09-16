@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { invalidJsonBodyError, unauthorizedError } from "@/lib/api-error-codes";
 import { getCurrentUserId } from "@/lib/server-auth";
 import { createManualDataBackup } from "@/lib/server-data-backup";
+import { archiveRewardFlowersFromTasks } from "@/lib/server-pet-store";
 import { readJsonBody } from "@/lib/server-request";
 import { clearTrash, listVisibleTrashTasks } from "@/lib/server-task-store";
 
@@ -27,6 +28,11 @@ export async function DELETE(request: Request) {
     }
   }
   await createManualDataBackup();
+  const visibleTrashTasks = await listVisibleTrashTasks(currentUserId);
+  const clearingTasks = taskIds
+    ? visibleTrashTasks.filter((task) => taskIds.includes(task.id))
+    : visibleTrashTasks;
+  await archiveRewardFlowersFromTasks(clearingTasks);
   const result = await clearTrash(currentUserId, taskIds);
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status });
   return NextResponse.json({ ok: true });
